@@ -31,12 +31,12 @@ void quantize_row_q2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
     quantize_row_q2_0_ref(x, y, k);
 }
 
-void quantize_row_pq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-    quantize_row_pq2_0_ref(x, y, k);
+void quantize_row_q2_0_g128(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q2_0_g128_ref(x, y, k);
 }
 
-void quantize_row_ptq1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-    quantize_row_ptq1_0_ref(x, y, k);
+void quantize_row_tq1_0_g128(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_tq1_0_g128_ref(x, y, k);
 }
 
 void quantize_row_q4x160(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
@@ -239,9 +239,9 @@ void ggml_vec_dot_q2_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-// PQ2_0: 128 weights per block = four Q8_0 blocks (4 * 32).
-void ggml_vec_dot_pq2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    const int qk = QK_PQ2_0;
+// Q2_0_G128: 128 weights per block = four Q8_0 blocks (4 * 32).
+void ggml_vec_dot_q2_0_g128_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK_Q2_0_G128;
     const int nb = n / qk;
 
     assert(n % qk == 0);
@@ -251,7 +251,7 @@ void ggml_vec_dot_pq2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(by);
     UNUSED(bs);
 
-    const block_pq2_0 * GGML_RESTRICT x = vx;
+    const block_q2_0_g128 * GGML_RESTRICT x = vx;
     const block_q8_0  * GGML_RESTRICT y = vy;
 
     float sumf = 0.0f;
@@ -286,9 +286,9 @@ void ggml_vec_dot_pq2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     *s = sumf;
 }
 
-// PTQ1_0 x Q8_0. Four Q8_0 blocks cover one 128-wide PTQ1_0 block.
-void ggml_vec_dot_ptq1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    const int qk = QK_PTQ1_0;
+// TQ1_0_G128 x Q8_0. Four Q8_0 blocks cover one 128-wide TQ1_0_G128 block.
+void ggml_vec_dot_tq1_0_g128_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK_TQ1_0_G128;
     const int nb = n / qk;
 
     assert(n % qk == 0);
@@ -298,7 +298,7 @@ void ggml_vec_dot_ptq1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
     UNUSED(by);
     UNUSED(bs);
 
-    const block_ptq1_0 * GGML_RESTRICT x = vx;
+    const block_tq1_0_g128 * GGML_RESTRICT x = vx;
     const block_q8_0   * GGML_RESTRICT y = vy;
 
     static const uint8_t pow3[6] = {1, 3, 9, 27, 81, 243};
@@ -307,7 +307,7 @@ void ggml_vec_dot_ptq1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
     float sumf = 0.0f;
 
     for (int i = 0; i < nb; i++) {
-        int8_t q[QK_PTQ1_0];
+        int8_t q[QK_TQ1_0_G128];
         int o = 0;
 
         size_t j = 0;
@@ -330,7 +330,7 @@ void ggml_vec_dot_ptq1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
                 q[o++] = (int8_t) (xi - 1);
             }
         }
-        assert(o == QK_PTQ1_0);
+        assert(o == QK_TQ1_0_G128);
 
         const float d0 = GGML_CPU_FP16_TO_FP32(x[i].d);
         float sumi = 0.0f;

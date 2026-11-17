@@ -260,10 +260,10 @@ extern "C" {
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
         GGML_TYPE_F8_E4M3 = 43,
-        // Scion/Prism private containers. These are not upstream types; they are
+        // Scion private containers. These are not upstream types; they are
         // kept above upstream's F8_E4M3 so published Scion GGUFs load unchanged.
-        GGML_TYPE_PQ2_0   = 142, // 2-bit, group 128 (Scion 35B experts + corrections)
-        GGML_TYPE_PTQ1_0  = 143, // ternary, group 128 (Scion 176B experts)
+        GGML_TYPE_Q2_0_G128   = 142, // 2-bit, group 128 (Scion 35B experts + corrections)
+        GGML_TYPE_TQ1_0_G128  = 143, // ternary, group 128 (Scion 176B experts)
         GGML_TYPE_Q4X160  = 146, // 4-bit PLE table, 160-element rows (Scion 176B Q4X160)
         GGML_TYPE_COUNT   = 147,
     };

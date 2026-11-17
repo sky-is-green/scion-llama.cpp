@@ -112,10 +112,10 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 #define VDR_Q2_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time for parallelism
 #define VDR_Q2_0_Q8_1_MMQ  2  // Q2_0 group 64: 128 bits (4 ints) per block, 2 32-element chunks
 
-#define VDR_PQ2_0_Q8_1_MMVQ 1  // one 32-element chunk at a time (same per-chunk codec as Q2_0)
-#define VDR_PTQ1_0_Q8_1_MMVQ 4 // whole 128 block per call: keeps the byte walk uniform across lanes
-#define VDR_PQ2_0_Q8_1_MMQ  2  // Q2_0 group 128: 4 32-element chunks per block
-#define VDR_PTQ1_0_Q8_1_MMQ  2 // expanded to signed bytes in the MMQ tile loader
+#define VDR_Q2_0_G128_Q8_1_MMVQ 1  // one 32-element chunk at a time (same per-chunk codec as Q2_0)
+#define VDR_TQ1_0_G128_Q8_1_MMVQ 4 // whole 128 block per call: keeps the byte walk uniform across lanes
+#define VDR_Q2_0_G128_Q8_1_MMQ  2  // Q2_0 group 128: 4 32-element chunks per block
+#define VDR_TQ1_0_G128_Q8_1_MMQ  2 // expanded to signed bytes in the MMQ tile loader
 
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
@@ -802,12 +802,12 @@ static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
     return d2 * d8 * sumi;
 }
 
-static __device__ __forceinline__ float vec_dot_pq2_0_q8_1(
+static __device__ __forceinline__ float vec_dot_q2_0_g128_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
-    const block_pq2_0 * bq2_0 = (const block_pq2_0 *) vbq + kbx;
+    const block_q2_0_g128 * bq2_0 = (const block_q2_0_g128 *) vbq + kbx;
 
-    // PQ2_0 (group 128): 128 elements with ONE scale, 2 bits per element.
+    // Q2_0_G128 (group 128): 128 elements with ONE scale, 2 bits per element.
     // iqs selects one of the four 32-element chunks (0-3).
     const float     d2 = bq2_0->d;
     const int16_t * qs = (const int16_t *) bq2_0->qs + iqs * 4;
@@ -844,13 +844,13 @@ static __device__ __forceinline__ float vec_dot_pq2_0_q8_1(
 
 #if !defined(GGML_USE_HIP)
 template <int ncols_dst>
-static __device__ __forceinline__ void vec_dot_ptq1_0_q8_1_multi(const void * __restrict__ vbq,
+static __device__ __forceinline__ void vec_dot_tq1_0_g128_q8_1_multi(const void * __restrict__ vbq,
                                                                  const block_q8_1 * __restrict__ bq8_1,
                                                                  const int &    kbx,
                                                                  const int &    iqs,
                                                                  const uint32_t stride_col_y,
                                                                  float *        result) {
-    const block_ptq1_0 * bq                 = (const block_ptq1_0 *) vbq + kbx;
+    const block_tq1_0_g128 * bq                 = (const block_tq1_0_g128 *) vbq + kbx;
     int                  sumi[ncols_dst][4] = {};
 
 #pragma unroll
@@ -928,13 +928,13 @@ static __device__ __forceinline__ void vec_dot_ptq1_0_q8_1_multi(const void * __
 }
 #endif
 
-// PTQ1_0 x Q8_1. One call consumes the full 128-weight block.
-static __device__ __forceinline__ float vec_dot_ptq1_0_q8_1(const void * __restrict__ vbq,
+// TQ1_0_G128 x Q8_1. One call consumes the full 128-weight block.
+static __device__ __forceinline__ float vec_dot_tq1_0_g128_q8_1(const void * __restrict__ vbq,
                                                             const block_q8_1 * __restrict__ bq8_1,
                                                             const int & kbx,
                                                             const int & iqs) {
 #if defined(GGML_USE_HIP)
-    const block_ptq1_0 * bq      = (const block_ptq1_0 *) vbq + kbx;
+    const block_tq1_0_g128 * bq      = (const block_tq1_0_g128 *) vbq + kbx;
     int                  sumi[4] = { 0, 0, 0, 0 };
 
 #pragma unroll
@@ -984,7 +984,7 @@ static __device__ __forceinline__ float vec_dot_ptq1_0_q8_1(const void * __restr
     return (float) bq->d * acc;
 #else
     float result;
-    vec_dot_ptq1_0_q8_1_multi<1>(vbq, bq8_1, kbx, iqs, 0, &result);
+    vec_dot_tq1_0_g128_q8_1_multi<1>(vbq, bq8_1, kbx, iqs, 0, &result);
     return result;
 #endif
 }

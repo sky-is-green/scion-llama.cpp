@@ -3,11 +3,11 @@
 
 This is a header-only migration: tensor data is copied byte-for-byte.  It is
 only valid when the old and new types have the same block size and byte layout
-(the 35B legacy type 43 and PQ2_0 type 142 are both 34 bytes per 128 weights).
+(the 35B legacy type 43 and Q2_0_G128 type 142 are both 34 bytes per 128 weights).
 
 Usage:
   python scripts/scion/retype_gguf.py --from 43 --to 142 \
-      --in Scion-35B-A3B-PQ2_0-corr.gguf --out Scion-35B-A3B-PQ2_0-corr-v1.gguf
+      --in Scion-35B-A3B-Q2_0_G128-corr.gguf --out Scion-35B-A3B-Q2_0_G128-corr-v1.gguf
 """
 
 import argparse

@@ -43,8 +43,8 @@ static __device__ __forceinline__ void dequantize_q2_0(const void * vx, const in
     v.y = (c1 - 1) * d;
 }
 
-static __device__ __forceinline__ void dequantize_pq2_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
-    const block_pq2_0 * x = (const block_pq2_0 *) vx;
+static __device__ __forceinline__ void dequantize_q2_0_g128(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_q2_0_g128 * x = (const block_q2_0_g128 *) vx;
 
     const float d = x[ib].d;
 
@@ -62,13 +62,13 @@ static __device__ __forceinline__ void dequantize_pq2_0(const void * vx, const i
     v.y = (c1 - 1) * d;
 }
 
-static __device__ __forceinline__ void dequantize_ptq1_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
-    const block_ptq1_0 * x = (const block_ptq1_0 *) vx;
+static __device__ __forceinline__ void dequantize_tq1_0_g128(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_tq1_0_g128 * x = (const block_tq1_0_g128 *) vx;
 
     const float d = x[ib].d;
 
-    v.x = ptq1_0_trit(&x[ib], iqs + 0) * d;
-    v.y = ptq1_0_trit(&x[ib], iqs + 1) * d;
+    v.x = tq1_0_g128_trit(&x[ib], iqs + 0) * d;
+    v.y = tq1_0_g128_trit(&x[ib], iqs + 1) * d;
 }
 
 static __device__ __forceinline__ void dequantize_q4x160(const void * vx, const int64_t ib, const int iqs, float2 & v){

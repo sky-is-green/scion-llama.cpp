@@ -5664,10 +5664,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
     return true;
 }
 
-// ====================== Scion/Prism private containers ======================
-// PQ2_0 (type 142): same 2-bit codec as Q2_0, one fp16 scale per 128 weights.
-void quantize_row_pq2_0_ref(const float * GGML_RESTRICT x, block_pq2_0 * GGML_RESTRICT y, int64_t k) {
-    static const int qk = QK_PQ2_0;
+// ====================== Scion private containers ======================
+// Q2_0_G128 (type 142): same 2-bit codec as Q2_0, one fp16 scale per 128 weights.
+void quantize_row_q2_0_g128_ref(const float * GGML_RESTRICT x, block_q2_0_g128 * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_Q2_0_G128;
 
     assert(k % qk == 0);
 
@@ -5700,9 +5700,9 @@ void quantize_row_pq2_0_ref(const float * GGML_RESTRICT x, block_pq2_0 * GGML_RE
     }
 }
 
-// Lloyd-Max refinement of the PQ2_0 group scale. Prism's absmax rule stays
-// the default; packers opt in with GGML_PQ2_0_LLOYD=1.
-static float ggml_pq2_0_lloyd_scale(const float * GGML_RESTRICT x, int qk, float mean) {
+// Lloyd-Max refinement of the Q2_0_G128 group scale. the reference absmax rule stays
+// the default; packers opt in with GGML_Q2_0_G128_LLOYD=1.
+static float ggml_q2_0_g128_lloyd_scale(const float * GGML_RESTRICT x, int qk, float mean) {
     if (mean <= 0.0f) {
         return 0.0f;
     }
@@ -5734,8 +5734,8 @@ static float ggml_pq2_0_lloyd_scale(const float * GGML_RESTRICT x, int qk, float
     return best_a > 0.0f ? best_a : mean;
 }
 
-void quantize_row_pq2_0_lloyd_ref(const float * GGML_RESTRICT x, block_pq2_0 * GGML_RESTRICT y, int64_t k) {
-    static const int qk = QK_PQ2_0;
+void quantize_row_q2_0_g128_lloyd_ref(const float * GGML_RESTRICT x, block_q2_0_g128 * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_Q2_0_G128;
 
     assert(k % qk == 0);
 
@@ -5747,7 +5747,7 @@ void quantize_row_pq2_0_lloyd_ref(const float * GGML_RESTRICT x, block_pq2_0 * G
             sum_abs += fabsf(x[i*qk + j]);
         }
         float d = sum_abs / qk;
-        d = ggml_pq2_0_lloyd_scale(x + i*qk, qk, d);
+        d = ggml_q2_0_g128_lloyd_scale(x + i*qk, qk, d);
 
         y[i].d = GGML_FP32_TO_FP16(d);
         const float dq = GGML_FP16_TO_FP32(y[i].d);
@@ -5767,17 +5767,17 @@ void quantize_row_pq2_0_lloyd_ref(const float * GGML_RESTRICT x, block_pq2_0 * G
     }
 }
 
-static bool ggml_pq2_0_lloyd_enabled(void) {
+static bool ggml_q2_0_g128_lloyd_enabled(void) {
     static int cached = -1;
     if (cached < 0) {
-        const char * v = getenv("GGML_PQ2_0_LLOYD");
+        const char * v = getenv("GGML_Q2_0_G128_LLOYD");
         cached = (v && v[0] == '1') ? 1 : 0;
     }
     return cached != 0;
 }
 
-void dequantize_row_pq2_0(const block_pq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    static const int qk = QK_PQ2_0;
+void dequantize_row_q2_0_g128(const block_q2_0_g128 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_Q2_0_G128;
 
     assert(k % qk == 0);
 
@@ -5795,28 +5795,28 @@ void dequantize_row_pq2_0(const block_pq2_0 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
-size_t quantize_pq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    const bool lloyd = ggml_pq2_0_lloyd_enabled();
+size_t quantize_q2_0_g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    const bool lloyd = ggml_q2_0_g128_lloyd_enabled();
     static bool lloyd_logged = false;
     if (lloyd && !lloyd_logged) {
-        GGML_LOG_INFO("%s: GGML_PQ2_0_LLOYD=1 -> using the Lloyd-Max scale rule\n", __func__);
+        GGML_LOG_INFO("%s: GGML_Q2_0_G128_LLOYD=1 -> using the Lloyd-Max scale rule\n", __func__);
         lloyd_logged = true;
     }
     if (!quant_weights) {
         if (lloyd) {
-            quantize_row_pq2_0_lloyd_ref(src, dst, (int64_t)nrow*n_per_row);
+            quantize_row_q2_0_g128_lloyd_ref(src, dst, (int64_t)nrow*n_per_row);
         } else {
-            quantize_row_pq2_0_ref(src, dst, (int64_t)nrow*n_per_row);
+            quantize_row_q2_0_g128_ref(src, dst, (int64_t)nrow*n_per_row);
         }
-        return nrow * ggml_row_size(GGML_TYPE_PQ2_0, n_per_row);
+        return nrow * ggml_row_size(GGML_TYPE_Q2_0_G128, n_per_row);
     }
-    size_t row_size = ggml_row_size(GGML_TYPE_PQ2_0, n_per_row);
+    size_t row_size = ggml_row_size(GGML_TYPE_Q2_0_G128, n_per_row);
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrow; ++row) {
         if (lloyd) {
-            quantize_row_pq2_0_lloyd_ref(src, (block_pq2_0*)qrow, n_per_row);
+            quantize_row_q2_0_g128_lloyd_ref(src, (block_q2_0_g128*)qrow, n_per_row);
         } else {
-            quantize_row_pq2_0_ref(src, (block_pq2_0*)qrow, n_per_row);
+            quantize_row_q2_0_g128_ref(src, (block_q2_0_g128*)qrow, n_per_row);
         }
         src += n_per_row;
         qrow += row_size;
@@ -5824,16 +5824,16 @@ size_t quantize_pq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     return nrow * row_size;
 }
 
-// PTQ1_0 (type 143): base-3 trit packing as TQ1_0, one fp16 scale per 128.
-static const size_t ptq1_0_stages[3] = {32, 16, 8};
+// TQ1_0_G128 (type 143): base-3 trit packing as TQ1_0, one fp16 scale per 128.
+static const size_t tq1_0_g128_stages[3] = {32, 16, 8};
 
-void quantize_row_ptq1_0_ref(const float * GGML_RESTRICT x, block_ptq1_0 * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_PTQ1_0 == 0);
-    const int64_t nb = k / QK_PTQ1_0;
+void quantize_row_tq1_0_g128_ref(const float * GGML_RESTRICT x, block_tq1_0_g128 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ1_0_G128 == 0);
+    const int64_t nb = k / QK_TQ1_0_G128;
 
     for (int64_t i = 0; i < nb; i++) {
         float amax = 0.0f;
-        for (int j = 0; j < QK_PTQ1_0; j++) {
+        for (int j = 0; j < QK_TQ1_0_G128; j++) {
             amax = MAX(amax, fabsf(x[j]));
         }
 
@@ -5844,7 +5844,7 @@ void quantize_row_ptq1_0_ref(const float * GGML_RESTRICT x, block_ptq1_0 * GGML_
 
         size_t j = 0;
         for (size_t s = 0; s < 3; ++s) {
-            const size_t c = ptq1_0_stages[s];
+            const size_t c = tq1_0_g128_stages[s];
             for (; j + c <= sizeof(y->qs); j += c) {
                 for (size_t m = 0; m < c; ++m) {
                     uint8_t q = 0;
@@ -5874,9 +5874,9 @@ void quantize_row_ptq1_0_ref(const float * GGML_RESTRICT x, block_ptq1_0 * GGML_
     }
 }
 
-void dequantize_row_ptq1_0(const block_ptq1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_PTQ1_0 == 0);
-    const int64_t nb = k / QK_PTQ1_0;
+void dequantize_row_tq1_0_g128(const block_tq1_0_g128 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ1_0_G128 == 0);
+    const int64_t nb = k / QK_TQ1_0_G128;
 
     const uint8_t pow3[6] = {1, 3, 9, 27, 81, 243};
 
@@ -5885,7 +5885,7 @@ void dequantize_row_ptq1_0(const block_ptq1_0 * GGML_RESTRICT x, float * GGML_RE
 
         size_t j = 0;
         for (size_t s = 0; s < 3; ++s) {
-            const size_t c = ptq1_0_stages[s];
+            const size_t c = tq1_0_g128_stages[s];
             for (; j + c <= sizeof(x->qs); j += c) {
                 for (size_t n = 0; n < 5; ++n) {
                     for (size_t m = 0; m < c; ++m) {
@@ -5906,12 +5906,12 @@ void dequantize_row_ptq1_0(const block_ptq1_0 * GGML_RESTRICT x, float * GGML_RE
     }
 }
 
-size_t quantize_ptq1_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+size_t quantize_tq1_0_g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void)quant_weights;
-    const size_t row_size = ggml_row_size(GGML_TYPE_PTQ1_0, n_per_row);
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ1_0_G128, n_per_row);
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrow; ++row) {
-        quantize_row_ptq1_0_ref(src, (block_ptq1_0 *)qrow, n_per_row);
+        quantize_row_tq1_0_g128_ref(src, (block_tq1_0_g128 *)qrow, n_per_row);
         src  += n_per_row;
         qrow += row_size;
     }

@@ -13,7 +13,7 @@ Branch: `scion-base`.
 
 ## What is ported
 
-- **PQ2_0 (142)**, **PTQ1_0 (143)**, **Q4X160 (146)**: block layouts, reference quantizers, dequantizers, generic CPU vec_dot, type traits, CPU get_rows, CUDA/HIP dequant/get_rows/MMVQ.
+- **Q2_0_G128 (142)**, **TQ1_0_G128 (143)**, **Q4X160 (146)**: block layouts, reference quantizers, dequantizers, generic CPU vec_dot, type traits, CPU get_rows, CUDA/HIP dequant/get_rows/MMVQ.
 - **Embedded adapters**: `.lora_a/.lora_b` tensors embedded in the model file, `adapter.embedded=true`, `llama_model.internal_lora`, auto-apply in every context.
 - **TAARDIS correction hook**: `blk.N.ffn_moe_out.weight` is mapped to the `ffn_gate_inp` anchor and applied through `build_lora_branch` at the MoE block output. Ordinary `ssm_out`, `attn_output`, and `ffn_gate_inp` LoRAs use the existing `build_lora_mm` path.
 - **35B drafter**: direct `draft-mtp-sidecar` lane (fc1/fc2, no draft model).

@@ -1080,19 +1080,19 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q2_0> {
 };
 
 template<>
-struct ggml_cuda_type_traits<GGML_TYPE_PQ2_0> {
-    static constexpr int qk = QK_PQ2_0;
-    static constexpr int qr = QR_PQ2_0;
-    static constexpr int qi = QI_PQ2_0;
-    static constexpr int bs = sizeof(block_pq2_0);
+struct ggml_cuda_type_traits<GGML_TYPE_Q2_0_G128> {
+    static constexpr int qk = QK_Q2_0_G128;
+    static constexpr int qr = QR_Q2_0_G128;
+    static constexpr int qi = QI_Q2_0_G128;
+    static constexpr int bs = sizeof(block_q2_0_g128);
 };
 
 template<>
-struct ggml_cuda_type_traits<GGML_TYPE_PTQ1_0> {
-    static constexpr int qk = QK_PTQ1_0;
-    static constexpr int qr = QR_PTQ1_0;
-    static constexpr int qi = QI_PTQ1_0;
-    static constexpr int bs = sizeof(block_ptq1_0);
+struct ggml_cuda_type_traits<GGML_TYPE_TQ1_0_G128> {
+    static constexpr int qk = QK_TQ1_0_G128;
+    static constexpr int qr = QR_TQ1_0_G128;
+    static constexpr int qi = QI_TQ1_0_G128;
+    static constexpr int bs = sizeof(block_tq1_0_g128);
 };
 
 template<>
@@ -1546,10 +1546,10 @@ bool ggml_cuda_kernel_can_use_pdl(const void * kernel);
 
 #endif //defined(GGML_CUDA_USE_PDL)
 
-// PTQ1_0 packs trits base-3, five per byte, so element order is not positional.
+// TQ1_0_G128 packs trits base-3, five per byte, so element order is not positional.
 // This follows the CPU codec: 16-byte qs chunk, 8-byte qs chunk, then qh at
 // four trits per byte. Trits come out of the base-3 remainder recurrence.
-static __device__ __forceinline__ int ptq1_0_trit(const block_ptq1_0 * x, const int e) {
+static __device__ __forceinline__ int tq1_0_g128_trit(const block_tq1_0_g128 * x, const int e) {
     uint8_t b;
     int n;
     if (e < 80) {
