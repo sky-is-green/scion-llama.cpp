@@ -1080,6 +1080,30 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q2_0> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_PQ2_0> {
+    static constexpr int qk = QK_PQ2_0;
+    static constexpr int qr = QR_PQ2_0;
+    static constexpr int qi = QI_PQ2_0;
+    static constexpr int bs = sizeof(block_pq2_0);
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_PTQ1_0> {
+    static constexpr int qk = QK_PTQ1_0;
+    static constexpr int qr = QR_PTQ1_0;
+    static constexpr int qi = QI_PTQ1_0;
+    static constexpr int bs = sizeof(block_ptq1_0);
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_Q4X160> {
+    static constexpr int qk = QK4X160;
+    static constexpr int qr = QR4X160;
+    static constexpr int qi = QI4X160;
+    static constexpr int bs = sizeof(block_q4x160);
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_Q4_0> {
     static constexpr int qk = QK4_0;
     static constexpr int qr = QR4_0;
@@ -1521,6 +1545,32 @@ struct ggml_cuda_pdl_config {
 bool ggml_cuda_kernel_can_use_pdl(const void * kernel);
 
 #endif //defined(GGML_CUDA_USE_PDL)
+
+// PTQ1_0 packs trits base-3, five per byte, so element order is not positional.
+// This follows the CPU codec: 16-byte qs chunk, 8-byte qs chunk, then qh at
+// four trits per byte. Trits come out of the base-3 remainder recurrence.
+static __device__ __forceinline__ int ptq1_0_trit(const block_ptq1_0 * x, const int e) {
+    uint8_t b;
+    int n;
+    if (e < 80) {
+        b = x->qs[e & 15];              n = e >> 4;
+    } else if (e < 120) {
+        const int t = e - 80;
+        b = x->qs[16 + (t & 7)];        n = t >> 3;
+    } else {
+        const int t = e - 120;
+        b = x->qh[t & 1];               n = t >> 1;
+    }
+
+    uint32_t v = b;
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        if (i < n) {
+            v = (v * 3) & 0xFF;
+        }
+    }
+    return (int) ((v * 3) >> 8) - 1;
+}
 
 // PDL and __restrict__ need to be mutually exclusive, see https://github.com/ggml-org/llama.cpp/pull/24030
 # if (defined(GGML_CUDA_USE_PDL) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER)

@@ -1247,6 +1247,8 @@ void common_fit_apply(common_params & params, llama_model_params & mparams, llam
     const bool has_draft = params.speculative.has_dft();
     const bool spec_mtp  = std::find(params.speculative.types.begin(), params.speculative.types.end(),
         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    const bool spec_sidecar = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+        COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR) != params.speculative.types.end();
 
     common_params params_dft = common_base_params_to_speculative(params);
 
@@ -1269,7 +1271,7 @@ void common_fit_apply(common_params & params, llama_model_params & mparams, llam
         params.tensor_buft_overrides.data(),
         params.fit_params_target.data(),
         params.fit_params_min_ctx,
-        has_draft || spec_mtp ? &extra : nullptr,
+        (has_draft && !spec_sidecar) || spec_mtp ? &extra : nullptr,
         params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
 }
 

@@ -3,6 +3,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "ggml-cpp.h"
+#include "gguf.h"
 #include "llama.h"
 #include "log.h"
 #include "ngram-cache.h"
@@ -74,6 +75,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
+    {"draft-mtp-sidecar", COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR},
     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
     {"draft-dspark",  COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
@@ -1544,6 +1546,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     int32_t n_mtp_layers  = 1;
     bool    is_mem_shared = false;   // gemma4
     bool    chain_heads   = false;   // derived in the ctor: n_mtp_layers > 1 && !is_mem_shared
+    bool    is_sidecar_model = false; // mtp-sidecar: the graph reads the regular embd input
 
     // Per-sequence cross-batch carryover: pair (h_p, x_{p+1}) at MTP pos p+1.
     // The last h-row of one process() call needs the first token of the NEXT
@@ -1577,9 +1580,21 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         GGML_ASSERT(ctx_tgt && ctx_dft && "MTP requires ctx_tgt and ctx_dft to be set");
 
         n_embd = llama_model_n_embd_out(llama_get_model(ctx_dft));
-        GGML_ASSERT(n_embd == llama_model_n_embd_out(llama_get_model(ctx_tgt)) &&
+        GGML_ASSERT(n_embd == llama_model_n_embd_nextn(llama_get_model(ctx_tgt)) &&
                 "MTP input row width must match the target h_nextn width");
         n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
+
+        // the external mtp-sidecar model reads the h row as a regular token embedding
+        {
+            struct gguf_init_params gp = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
+            gguf_context_ptr gctx(gguf_init_from_file(this->params.mparams.path.c_str(), gp));
+            if (gctx) {
+                const int id = gguf_find_key(gctx.get(), "general.architecture");
+                if (id >= 0 && gguf_get_kv_type(gctx.get(), id) == GGUF_TYPE_STRING) {
+                    is_sidecar_model = std::string(gguf_get_val_str(gctx.get(), id)) == "mtp-sidecar";
+                }
+            }
+        }
 
         SPC_TRC("%s", "adding speculative implementation 'draft-mtp'\n");
         SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
@@ -1877,6 +1892,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
 
             const int32_t idx = batch.add(dp.id_last, dp.pos0, seq_id, true);
+            if (is_sidecar_model) {
+                batch.set_embd(idx, { pending_h[seq_id].data(), 1, (size_t) n_embd });
+            }
             batch.set_embd_state(idx, { pending_h[seq_id].data(), 1, (size_t) n_embd });
 
             i_last[seq_id] = idx;
@@ -2056,6 +2074,107 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 };
 
 // state of self-speculation (simple implementation, not ngram-map)
+// Scion MTP sidecar: a small frozen-body MLP drafter (fc1/gelu/fc2) evaluated
+// by the target context itself. It consumes the target's post-norm hidden and
+// the token to be decoded; no draft model or draft context is needed.
+struct common_speculative_impl_draft_mtp_sidecar : public common_speculative_impl {
+    common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt + sidecar path)
+
+    int32_t n_embd = 0;
+    bool enabled = true;
+
+    // [n_seq][n_embd] post-norm hidden at the most recent decoded row
+    std::vector<std::vector<float>> last_h;
+
+    common_speculative_impl_draft_mtp_sidecar(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR, n_seq, params.draft.n_max)
+        , params(params.draft)
+    {
+        auto * ctx_tgt = this->params.ctx_tgt;
+        if (!ctx_tgt) {
+            throw std::runtime_error("draft-mtp-sidecar requires the target context");
+        }
+        n_embd = llama_model_n_embd_out(llama_get_model(ctx_tgt));
+
+        SPC_TRC("%s", "adding speculative implementation 'draft-mtp-sidecar'\n");
+        SPC_TRC("- path=%s, n_max=%d, n_embd=%d\n",
+                this->params.mparams.path.c_str(), this->params.n_max, n_embd);
+
+        if (this->params.n_max <= 0) {
+            SPC_WRN("%s", "draft-mtp-sidecar disabled (--spec-draft-n-max 0)\n");
+            enabled = false;
+            return;
+        }
+        if (this->params.mparams.path.empty()) {
+            throw std::runtime_error(
+                    "draft-mtp-sidecar needs the sidecar file: pass it with -md/--model-draft");
+        }
+
+        if (!llama_mtp_sidecar_load(ctx_tgt, this->params.mparams.path.c_str())) {
+            throw std::runtime_error("failed to load MTP sidecar '" + this->params.mparams.path + "'");
+        }
+
+        // the head consumes the target's post-norm hidden of every decoded row
+        llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
+
+        last_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
+    }
+
+    void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
+        // nothing to seed: the head reads the target's own hidden states
+    }
+
+    bool process(const common_batch & batch_in) override {
+        if (!enabled || batch_in.size() <= 0) {
+            return true;
+        }
+
+        std::vector<int32_t> last(n_seq, -1);
+        for (int32_t k = 0; k < batch_in.size(); ++k) {
+            const llama_seq_id seq_id = batch_in.tokens[k].seq_id;
+            if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq) {
+                last[seq_id] = k;
+            }
+        }
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (last[seq_id] < 0) {
+                continue;
+            }
+            // unmasked nextn rows are stored densely by batch position
+            const float * h = llama_get_embeddings_nextn_ith(params.ctx_tgt, last[seq_id]);
+            if (h == nullptr) {
+                SPC_WRN("no nextn hidden for seq_id=%d (embeddings_nextn not engaged?)\n", (int) seq_id);
+                return false;
+            }
+            std::memcpy(last_h[seq_id].data(), h, (size_t) n_embd * sizeof(float));
+        }
+        return true;
+    }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        if (!enabled) {
+            return;
+        }
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) dparams.size(); ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
+                continue;
+            }
+            llama_token tok = -1;
+            if (!llama_mtp_sidecar_draft(params.ctx_tgt, last_h[seq_id].data(), (int32_t) dp.id_last, &tok)) {
+                SPC_ERR("sidecar draft failed for seq_id=%d\n", (int) seq_id);
+                continue;
+            }
+            dp.result->push_back(tok);
+        }
+    }
+
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
+        // no internal state to update
+    }
+};
+
 struct common_speculative_impl_ngram_simple : public common_speculative_impl {
     common_params_speculative_ngram_map params;
 
@@ -2539,6 +2658,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:  return "draft-simple";
         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR: return "draft-mtp-sidecar";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:  return "draft-dspark";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
@@ -2594,6 +2714,16 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
     }
 
     const std::string arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
+    if (arch == "mtp" && gguf_find_tensor(gguf_ctx.get(), "mtp.fc1.weight") >= 0) {
+        // 35B k=1 external head: evaluated directly by the target context
+        SPC_INF("%s", "auto-detected 'draft-mtp-sidecar' from the sidecar metadata\n");
+        return { COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR };
+    }
+    if (arch == "mtp-sidecar" && gguf_find_tensor(gguf_ctx.get(), "mtp.fc1.weight") >= 0) {
+        // 176B v2 chained head: a draft model with a state head, run by draft-mtp
+        SPC_INF("%s", "auto-detected 'draft-mtp' from the mtp-sidecar model metadata\n");
+        return { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+    }
     if (arch != "dflash") {
         const uint32_t block_count = gguf_get_val_u32(gguf_ctx.get(), gguf_find_key(gguf_ctx.get(), (arch + ".block_count").c_str()));
 
@@ -2633,6 +2763,10 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
+                break;
+            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR:
+                // the sidecar head produces exactly one draft token per step
+                n_max = std::max(n_max, spec->draft.n_max > 0 ? 1 : 0);
                 break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
                 n_max = std::max(n_max, (int32_t) spec->ngram_simple.size_m);
@@ -2835,6 +2969,9 @@ common_speculative_init_result::common_speculative_init_result(
     const bool spec_mtp = std::find(params.speculative.types.begin(),
                                     params.speculative.types.end(),
                                     COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    const bool spec_sidecar = std::find(params.speculative.types.begin(),
+                                        params.speculative.types.end(),
+                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR) != params.speculative.types.end();
 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
@@ -2852,7 +2989,7 @@ common_speculative_init_result::common_speculative_init_result(
     cparams.ctx_other = ctx_tgt;
 
     std::string model_path;
-    if (has_draft) {
+    if (has_draft && !spec_sidecar) {
         model_path = params.speculative.draft.mparams.path;
         LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
 
@@ -2871,7 +3008,7 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->context.reset(ctx_dft);
-    } else if (spec_mtp) {
+    } else if (spec_mtp && !spec_sidecar) {
         model_path = params.model.path;
 
         LOG_INF("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
@@ -2926,7 +3063,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         };
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 12);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
@@ -2941,6 +3078,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP,    params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params.draft.ctx_dft != nullptr);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR, params.draft.ctx_tgt != nullptr);
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
@@ -2959,6 +3097,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {
                 impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR: {
+                impls.push_back(std::make_unique<common_speculative_impl_draft_mtp_sidecar>(config.params, n_seq));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH: {

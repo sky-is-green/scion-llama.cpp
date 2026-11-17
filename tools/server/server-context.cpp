@@ -1220,7 +1220,10 @@ private:
         const bool spec_mtp = std::find(params_base.speculative.types.begin(),
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
-        const bool has_spec = has_draft || spec_mtp;
+        const bool spec_sidecar = std::find(params_base.speculative.types.begin(),
+                                        params_base.speculative.types.end(),
+                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP_SIDECAR) != params_base.speculative.types.end();
+        const bool has_spec = has_draft || spec_mtp || spec_sidecar;
 
         if (callback_state) {
             std::vector<std::string> stages = {"text_model"};
@@ -1349,12 +1352,12 @@ private:
                 model_dft = spec_init->model();
                 ctx_dft   = spec_init->context();
 
-                if (has_draft && model_dft == nullptr) {
+                if (has_draft && !spec_sidecar && model_dft == nullptr) {
                     SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
                     return false;
                 }
 
-                if (ctx_dft == nullptr) {
+                if (!spec_sidecar && ctx_dft == nullptr) {
                     SRV_ERR("%s", "failed to create MTP context\n");
                     return false;
                 }

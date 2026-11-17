@@ -17,6 +17,7 @@
 #include <vector>
 
 struct llama_model;
+struct llama_mtp_sidecar;
 class llama_batch_allocr;
 class llama_moe_cache;
 
@@ -90,6 +91,10 @@ struct llama_context {
 
     float * get_embeddings_nextn();
     float * get_embeddings_nextn_ith(int32_t i);
+
+    // Scion MTP sidecar drafter (see llama-mtp-sidecar.h)
+    bool mtp_sidecar_load(const char * path);
+    bool mtp_sidecar_draft(const float * h, int32_t token, llama_token * token_out);
 
     float * get_embeddings_layer_inp(uint32_t lid);
 
@@ -340,6 +345,9 @@ private:
 
     llama_adapter_cvec_ptr  cvec;
     llama_adapter_loras_ptr loras;
+
+    // Scion MTP sidecar drafter (frozen-body head; see llama-mtp-sidecar.h)
+    std::unique_ptr<llama_mtp_sidecar> mtp_sidecar;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 

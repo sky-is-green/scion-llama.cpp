@@ -52,6 +52,8 @@ void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
     }
     qwen4exp_require_nonzero(ml, LLM_KV_HYPER_CONNECTION_LOW_RANK, hparams.hc_low_rank);
     hparams.n_embd_out_impl = hparams.dsv4_hc_mult * hparams.n_embd;
+    // the MTP head input is the final mixer's n_embd-wide row, not the hc state
+    hparams.n_embd_nextn_impl = hparams.n_embd;
 
     ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
@@ -549,22 +551,17 @@ llama_model_qwen4exp::graph::graph(const llm_graph_params & params) :
         cb(res_hc, "l_last", il);
     }
 
-    // the MTP head reads the hc-wide residual, before the final mixer
-    res->t_h_nextn = ggml_reshape_2d(ctx0, res_hc, n_embd*hc, res_hc->ne[2]);
-    cb(res->t_h_nextn, "h_nextn", -1);
-    ggml_build_forward_expand(gf, res->t_h_nextn);
-
-    if (crop_after_nextn(inp_out_ids)) {
-        res_hc = ggml_reshape_2d(ctx0, res_hc, n_embd*hc, res_hc->ne[2]);
-        res_hc = ggml_get_rows(ctx0, res_hc, inp_out_ids);
-        res_hc = ggml_reshape_3d(ctx0, res_hc, n_embd, hc, res_hc->ne[1]);
-    }
-
     // the final mixer is the output norm: there is no separate one
     hc_mix head_mix = build_hc_mix(res_hc,
             model.hc_head_norm, model.hc_head_down, model.hc_head_up,
             nullptr, nullptr, -1);
     ggml_tensor * cur = head_mix.cur;
+
+    // the mixer's output row IS the head input for the external MTP sidecar
+    if (cparams.embeddings_nextn) {
+        cb(cur, "h_nextn", -1);
+        res->t_h_nextn = cur;
+    }
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;

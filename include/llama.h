@@ -581,6 +581,7 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_out   (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_embd_nextn (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_layer      (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_layer_nextn(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head       (const struct llama_model * model);
@@ -1166,6 +1167,11 @@ extern "C" {
 
     // Get the nextn embeddings for the ith token, mirroring llama_get_embeddings_ith()
     LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
+
+    // Scion MTP sidecar drafter: an external frozen-body fc head (not a draft model).
+    // h is the target's post-norm final hidden row, token is the next token to decode.
+    LLAMA_API bool llama_mtp_sidecar_load(struct llama_context * ctx, const char * path);
+    LLAMA_API bool llama_mtp_sidecar_draft(struct llama_context * ctx, const float * h, int32_t token, llama_token * token_out);
 
     // Set whether the context outputs the input embeddings of a specific layer
     LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
