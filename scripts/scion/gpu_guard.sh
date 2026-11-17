@@ -25,8 +25,8 @@ check_split() {
         fail "invalid split '$s'; expected spare,display (e.g. 0.75,0.25)"
         return 1
     fi
-    if ! awk -v a="$a" -v b="$b" 'BEGIN { exit !(a > b && a + b > 0.99 && a + b < 1.01) }'; then
-        fail "refusing split '$s'; the spare fraction must be greater than the display fraction and they must sum to 1"
+    if ! awk -v a="$a" -v b="$b" 'BEGIN { exit !(a + b > 0.99 && a + b < 1.01 && b <= 0.55) }'; then
+        fail "refusing split '$s'; the display fraction must be <= 0.55 and the fractions must sum to 1"
         return 1
     fi
     return 0
