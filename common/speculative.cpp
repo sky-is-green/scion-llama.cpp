@@ -1991,6 +1991,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                         batch.set_embd_state(idx, { chain_h[seq_id].data() + (size_t) t * n_embd, 1, (size_t) n_embd });
                         i_last[seq_id] = idx;
                     }
+                } else if (is_sidecar_model) {
+                    // the external fc3 head advances one position per draft and its
+                    // own h_nextn row becomes the next step's input row
+                    const int32_t idx = batch.add(id, dp.pos0 + i + 1, seq_id, true);
+                    batch.set_embd(idx, { h_row, 1, (size_t) n_embd });
+                    batch.set_embd_state(idx, { h_row, 1, (size_t) n_embd });
+                    i_last[seq_id] = idx;
                 } else if (is_mem_shared) {
                     // note: with shared memory (e.g. Gemma4 assistants) we use the same position for all draft tokens
                     // ref: https://github.com/huggingface/transformers/blob/effde20942e3f82a1b97449f60b3a48c5ff96145/docs/source/en/model_doc/gemma4_assistant.md?plain=1#L36-L37
