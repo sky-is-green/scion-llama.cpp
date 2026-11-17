@@ -191,6 +191,33 @@ typedef struct {
 } block_q2_0;
 static_assert(sizeof(block_q2_0) == sizeof(ggml_half) + QK2_0 / 4, "wrong q2_0 block size/padding");
 
+// Scion/Prism private containers (types 142/143/146; see ggml.h).
+// PQ2_0: same 2-bit codec as Q2_0, one fp16 scale per 128 weights.
+#define QK_PQ2_0 128
+typedef struct {
+    ggml_half d;                 // delta (scale)
+    uint8_t qs[QK_PQ2_0 / 4];    // 2 bits per element
+} block_pq2_0;
+static_assert(sizeof(block_pq2_0) == sizeof(ggml_half) + QK_PQ2_0 / 4, "wrong pq2_0 block size/padding");
+
+// PTQ1_0: base-3 trit packing as TQ1_0, but one fp16 scale per 128 weights.
+#define QK_PTQ1_0 128
+typedef struct {
+    uint8_t qs[(QK_PTQ1_0 - 4*QK_PTQ1_0/64)/5]; // 24 B, 5 trits per byte -> 120 values
+    uint8_t qh[QK_PTQ1_0/64];                   //  2 B, 4 trits per byte ->   8 values
+    ggml_half d;                                // scale
+} block_ptq1_0;
+static_assert(sizeof(block_ptq1_0) == sizeof(ggml_half) + QK_PTQ1_0/64 + (QK_PTQ1_0 - 4*QK_PTQ1_0/64)/5, "wrong ptq1_0 block size/padding");
+
+// Q4X160: one 160-element PLE table row per block, 4-bit codes into a fixed
+// 16-level codebook and one fp16 scale.
+#define QK4X160 160
+typedef struct {
+    ggml_half d;              // scale
+    uint8_t qs[QK4X160 / 2];  // 4-bit codes, 2 per byte
+} block_q4x160;
+static_assert(sizeof(block_q4x160) == sizeof(ggml_half) + QK4X160/2, "wrong q4x160 block size/padding");
+
 #define QK4_0 32
 typedef struct {
     ggml_half d;           // delta
@@ -1119,6 +1146,15 @@ GGML_TABLE_END()
 // TODO: fix name to kvalues_iq4_nl
 GGML_TABLE_BEGIN(int8_t, kvalues_iq4nl, 16)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
+GGML_TABLE_END()
+
+// Q4X160 codebook: 16 levels from the released Scion PLE table. The 4-bit code
+// is the index into this table.
+GGML_TABLE_BEGIN(float, kQ4x160_levels, 16)
+    -0.830319583f, -0.56551832f, -0.395098478f, -0.278073937f,
+    -0.207071558f, -0.134492248f, -0.105560891f, -0.0803469718f,
+    8.09813901e-06f, 0.0911125243f, 0.129564166f, 0.206828877f,
+    0.278073341f, 0.395026445f, 0.564443111f, 0.827598035f,
 GGML_TABLE_END()
 
 // e2m1 values (doubled), shared by MXFP4 and NVFP4

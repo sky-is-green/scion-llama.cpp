@@ -82,6 +82,11 @@ struct llama_adapter_lora {
 
     llama_adapter_lora_weight * get_weight(ggml_tensor * w);
 
+    llama_adapter_lora_weight * get_weight_named(const std::string & name) {
+        auto pos = ab_map.find(name);
+        return pos != ab_map.end() ? &pos->second : nullptr;
+    }
+
     uint32_t get_n_nodes() const {
         return ab_map.size() * 6u; // a, b, scale, add, 2 x mul_mat
     }

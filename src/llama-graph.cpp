@@ -1721,6 +1721,34 @@ ggml_tensor * llm_graph_context::build_lora_mm(
     return res;
 }
 
+ggml_tensor * llm_graph_context::build_lora_branch(
+          const char  * name,
+          ggml_tensor * cur) const {
+    ggml_tensor * res = nullptr;
+
+    for (const auto & lora : *loras) {
+        llama_adapter_lora_weight * lw = lora.first->get_weight_named(name);
+        if (lw == nullptr) {
+            continue;
+        }
+
+        LLAMA_LOG_DEBUG("%s: applying lora branch '%s'\n", __func__, name);
+
+        const float adapter_scale = lora.second;
+        const float scale = lw->get_scale(lora.first->alpha, adapter_scale);
+
+        ggml_tensor * ab_cur = ggml_mul_mat(
+                ctx0, lw->b,
+                ggml_mul_mat(ctx0, lw->a, cur)
+                );
+
+        ab_cur = ggml_scale(ctx0, ab_cur, scale);
+        res = res ? ggml_add(ctx0, res, ab_cur) : ab_cur;
+    }
+
+    return res;
+}
+
 llm_graph_amax_src1 llm_graph_context::build_amax_src1_f16(
           ggml_tensor * cur) const {
     llm_graph_amax_src1 result = {

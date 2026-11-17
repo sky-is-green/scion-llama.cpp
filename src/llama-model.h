@@ -946,6 +946,10 @@ struct llama_model {
     // for keeping track of associated LoRA adapters
     std::unordered_set<llama_adapter_lora *> loras;
 
+    // adapter embedded in the model file itself (single-file release).
+    // Owned via `loras`; auto-applied by every context.
+    llama_adapter_lora * internal_lora = nullptr;
+
     // which tensors can be prefetched - driven by TENSOR_READ_LAZY
     std::unordered_set<const ggml_tensor *> can_prefetch;
 

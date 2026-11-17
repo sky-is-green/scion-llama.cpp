@@ -148,7 +148,26 @@ llama_adapter_lora_weight * llama_adapter_lora::get_weight(ggml_tensor * w) {
     return nullptr;
 }
 
-static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama_adapter_lora & adapter) {
+// Scion/TAARDIS virtual LoRA targets: adapter pairs that correct an activation
+// rather than a weight. `blk.N.ffn_moe_out.weight` is the MoE block output of
+// layer N; it anchors on ffn_gate_inp so it runs on the same device as the layer.
+static bool taardis_ends_with(const std::string & s, const std::string & suffix) {
+    return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+static bool taardis_virtual_target(const std::string & name) {
+    return taardis_ends_with(name, ".ffn_moe_out.weight");
+}
+
+static const ggml_tensor * taardis_virtual_anchor(const llama_model & model, const std::string & name) {
+    if (taardis_ends_with(name, ".ffn_moe_out.weight")) {
+        // blk.N.ffn_moe_out.weight -> blk.N.ffn_gate_inp.weight
+        return model.get_tensor((name.substr(0, name.size() - std::string("ffn_moe_out.weight").size()) + "ffn_gate_inp.weight").c_str());
+    }
+    return nullptr;
+}
+
+static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama_adapter_lora & adapter, bool embedded = false) {
     ggml_context * ctx_init;
     gguf_init_params meta_gguf_params = {
         /* .no_alloc = */ true,
@@ -203,7 +222,12 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
         LLM_KV llm_kv = LLM_KV(LLM_ARCH_UNKNOWN);
 
         auto general_type = get_kv_str(llm_kv(LLM_KV_GENERAL_TYPE));
-        if (general_type != "adapter") {
+        if (embedded) {
+            // single-file release: the adapter tensors live inside the model file
+            if (general_type != "model") {
+                throw std::runtime_error("expect general.type to be 'model' for an embedded adapter, but got: " + general_type);
+            }
+        } else if (general_type != "adapter") {
             throw std::runtime_error("expect general.type to be 'adapter', but got: " + general_type);
         }
 
@@ -291,6 +315,9 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
             // TODO: add support for norm vector
             // for now, we don't really care because most adapters still work fine without it
             continue;
+        } else if (embedded) {
+            // embedded adapter: the file also contains the model's own tensors; ignore them
+            continue;
         } else {
             throw std::runtime_error("LoRA tensor '" + name + "' has unexpected suffix");
         }
@@ -330,7 +357,9 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
         }
 
         // device buft and device ctx
-        const auto * model_tensor = model.get_tensor(name.c_str());
+        const bool is_virtual = taardis_virtual_target(name);
+        const bool is_moe_corr = taardis_ends_with(name, ".ffn_moe_out.weight");
+        const auto * model_tensor = is_virtual ? taardis_virtual_anchor(model, name) : model.get_tensor(name.c_str());
         if (!model_tensor) {
             throw std::runtime_error("LoRA tensor '" + name + "' does not exist in base model (hint: maybe wrong base model?)");
         }
@@ -361,7 +390,16 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
 
         ggml_context * dev_ctx = ctx_for_buft(buft);
         // validate tensor shape
-        if (is_token_embd) {
+        if (is_moe_corr) {
+            // moe block-output correction: a = [n_embd, rank], b = [rank, n_embd]
+            const int64_t n_embd = model.hparams.n_embd;
+            if (w.a->ne[0] != n_embd || w.b->ne[1] != n_embd) {
+                throw std::runtime_error("moe correction tensor '" + name + "' has incorrect shape (expected n_embd " + std::to_string(n_embd) + ")");
+            }
+            if (w.a->ne[1] != w.b->ne[0]) {
+                throw std::runtime_error("lora_a tensor is not transposed (hint: adapter from \"finetune\" example is no longer supported)");
+            }
+        } else if (is_token_embd) {
             // expect B to be non-transposed, A and B are flipped; see llm_build_inp_embd()
             if (model_tensor->ne[0] != w.b->ne[1] || model_tensor->ne[1] != w.a->ne[1]) {
                 throw std::runtime_error("tensor '" + name + "' has incorrect shape (hint: maybe wrong base model?)");
@@ -456,6 +494,31 @@ llama_adapter_lora * llama_adapter_lora_init_from_file_ptr(llama_model * model, 
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to apply lora adapter: %s\n", __func__, err.what());
 
+        delete adapter;
+    }
+
+    return nullptr;
+}
+
+llama_adapter_lora * llama_adapter_lora_init_embedded(llama_model * model, const char * path_lora) {
+    LLAMA_LOG_INFO("%s: loading embedded lora adapter from '%s' ...\n", __func__, path_lora);
+
+    FILE * file = ggml_fopen(path_lora, "rb");
+    if (!file) {
+        LLAMA_LOG_ERROR("%s: failed to open '%s': %s\n", __func__, path_lora, strerror(errno));
+        return nullptr;
+    }
+
+    llama_adapter_lora * adapter = new llama_adapter_lora(model);
+
+    try {
+        llama_adapter_lora_init_impl(*model, file, *adapter, /*embedded*/ true);
+        fclose(file);
+        return adapter;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: failed to apply embedded lora adapter: %s\n", __func__, err.what());
+
+        fclose(file);
         delete adapter;
     }
 

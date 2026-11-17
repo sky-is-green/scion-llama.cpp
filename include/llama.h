@@ -686,6 +686,13 @@ extern "C" {
             struct llama_model * model,
             const char * path_lora);
 
+    // Load an adapter embedded in a model file (single-file release):
+    // the file is a model (general.type == "model") that also carries the
+    // adapter's .lora_a/.lora_b tensors; non-adapter tensors are ignored.
+    LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init_embedded(
+            struct llama_model * model,
+            const char * path_lora);
+
     // Load a LoRA adapter from an open FILE pointer, reading from its current position
     LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init_from_file_ptr(
             struct llama_model * model,

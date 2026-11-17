@@ -1135,6 +1135,11 @@ struct llm_graph_context {
               ggml_tensor * cur,
               ggml_tensor * w_s = nullptr) const;
 
+    // apply a named LoRA branch to an activation (TAARDIS virtual targets)
+    ggml_tensor * build_lora_branch(
+              const char  * name,
+              ggml_tensor * cur) const;
+
     // do mat_mul_id, while optionally apply lora and per-expert scale
     // if slots is set, the experts are selected by slots instead of ids, from the MoE cache if cached (see build_moe_cache_slots)
     ggml_tensor * build_lora_mm_id(
