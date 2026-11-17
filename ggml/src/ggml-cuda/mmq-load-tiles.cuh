@@ -209,27 +209,31 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 }
 
 // TQ1_0_G128 stores its 128 weights as 120 base-3 digits packed 5 per byte plus
-// 8 more in qh. The DP4A tile holds the decoded signed bytes.
+// 8 more in qh. The DP4A tile holds the decoded signed bytes, four consecutive
+// weights per int. Decode with the reference carry walk: the packed byte is an
+// offset balanced-base-3 number, so the digits come from repeated *3 carries,
+// not from modulo 3.
 static __device__ __forceinline__ void ggml_cuda_mmq_decode_tq1_0_g128_qs4(uint32_t packed, int * __restrict__ dst, int stride) {
-#if defined(GGML_USE_HIP)
-    uint32_t v_lo = ggml_hip_perm(0, packed, 0x4140);
-    uint32_t v_hi = ggml_hip_perm(0, packed, 0x4342);
-#else
-    uint32_t v_lo = __byte_perm(packed, 0, 0x4140);
-    uint32_t v_hi = __byte_perm(packed, 0, 0x4342);
-#endif // defined(GGML_USE_HIP)
+    uint32_t v0 = (packed >>  0) & 0xFF;
+    uint32_t v1 = (packed >>  8) & 0xFF;
+    uint32_t v2 = (packed >> 16) & 0xFF;
+    uint32_t v3 = (packed >> 24) & 0xFF;
 
 #    pragma unroll
     for (int t = 0; t < 5; ++t) {
-        const uint32_t w_lo = v_lo * 3;
-        const uint32_t w_hi = v_hi * 3;
-        v_lo                = w_lo & 0x00FF00FF;
-        v_hi                = w_hi & 0x00FF00FF;
-#if defined(GGML_USE_HIP)
-        dst[t * stride] = __vsub4(ggml_hip_perm(w_hi, w_lo, 0x7531), 0x01010101);
-#else
-        dst[t * stride] = __vsub4(__byte_perm(w_lo, w_hi, 0x7531), 0x01010101);
-#endif // defined(GGML_USE_HIP)
+        const uint32_t w0 = v0 * 3;
+        const uint32_t w1 = v1 * 3;
+        const uint32_t w2 = v2 * 3;
+        const uint32_t w3 = v3 * 3;
+        const uint32_t q0 = (w0 >> 8) - 1;
+        const uint32_t q1 = (w1 >> 8) - 1;
+        const uint32_t q2 = (w2 >> 8) - 1;
+        const uint32_t q3 = (w3 >> 8) - 1;
+        v0 = w0 & 0xFF;
+        v1 = w1 & 0xFF;
+        v2 = w2 & 0xFF;
+        v3 = w3 & 0xFF;
+        dst[t * stride] = (int) ((q0 & 0xFF) | ((q1 & 0xFF) << 8) | ((q2 & 0xFF) << 16) | ((q3 & 0xFF) << 24));
     }
 }
 
@@ -271,18 +275,25 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             const int g = lane - 4;
             ggml_cuda_mmq_decode_tq1_0_g128_qs4(get_int_b4(bxi->qs + 16, g), row + 20 + g, 2);
         } else if (lane == 6) {
-            uint32_t v = (uint32_t) bxi->qh[0] | ((uint32_t) bxi->qh[1] << 16);
+            // qh holds 4 base-3 digits per byte for the last 8 weights; the tile
+            // order is (t, h) pairs: 120,121 = t0h0,t0h1; 122,123 = t1h0,t1h1; ...
+            uint32_t v0 = (uint32_t) bxi->qh[0];
+            uint32_t v1 = (uint32_t) bxi->qh[1];
 #    pragma unroll
             for (int t = 0; t < 4; t += 2) {
-                const uint32_t w0 = v * 3;
-                v                 = w0 & 0x00FF00FF;
-                const uint32_t w1 = v * 3;
-                v                 = w1 & 0x00FF00FF;
-#if defined(GGML_USE_HIP)
-                row[30 + t / 2] = __vsub4(ggml_hip_perm(w1, w0, 0x7531), 0x01010101);
-#else
-                row[30 + t / 2] = __vsub4(__byte_perm(w0, w1, 0x7531), 0x01010101);
-#endif // defined(GGML_USE_HIP)
+                const uint32_t w0 = v0 * 3;
+                const uint32_t w1 = v1 * 3;
+                const uint32_t a0 = (w0 >> 8) - 1;
+                const uint32_t a1 = (w1 >> 8) - 1;
+                v0 = w0 & 0xFF;
+                v1 = w1 & 0xFF;
+                const uint32_t x0 = v0 * 3;
+                const uint32_t x1 = v1 * 3;
+                const uint32_t b0 = (x0 >> 8) - 1;
+                const uint32_t b1 = (x1 >> 8) - 1;
+                v0 = x0 & 0xFF;
+                v1 = x1 & 0xFF;
+                row[30 + t / 2] = (int) ((a0 & 0xFF) | ((a1 & 0xFF) << 8) | ((b0 & 0xFF) << 16) | ((b1 & 0xFF) << 24));
             }
         }
     }
