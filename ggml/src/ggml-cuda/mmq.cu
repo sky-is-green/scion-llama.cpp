@@ -432,7 +432,8 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
             break;
         case GGML_TYPE_TQ1_0_G128:
             // MMQ configs for this type exist only for RDNA3.
-            mmq_supported = GGML_CUDA_CC_IS_RDNA3(cc);
+            // SCION_DISABLE_TQ1_MMQ=1 forces the MMVQ/BLAS path for A/B testing.
+            mmq_supported = GGML_CUDA_CC_IS_RDNA3(cc) && getenv("SCION_DISABLE_TQ1_MMQ") == nullptr;
             break;
         default:
             mmq_supported = false;
