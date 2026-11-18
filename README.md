@@ -62,14 +62,17 @@ Everything that is not the PLE table fits in the two cards; the PLE stays host-m
 export LD_LIBRARY_PATH=$W/rocm-7.2.4/opt/rocm/lib:$W/rocm-7.2.4/usr/lib
 export HIP_VISIBLE_DEVICES=1,0
 ./build-hip/bin/llama-cli -m Scion-FlashNext-176B-A6B-Q6_K.gguf \
-  --device ROCm0,ROCm1 -ts 0.5,0.5 -ngl 99 -ncmoe 0 --moe-cache-mib 0 \
+  --device ROCm0,ROCm1 -ts 0.55,0.45 -ngl 99 -ncmoe 0 --moe-cache-mib 0 \
   -ot per_layer_token_embd=CPU -c 4096 -fit off \
   -p "The capital of France is" -n 16 -st --temp 0 --top-k 1 --top-p 1 -s 1001
 ```
 
-Load takes ~2.5 min. The display card must stay under 18 GiB total (model + desktop);
-`scripts/scion/gpu_run.sh` enforces it at runtime and `scripts/scion/gpu_guard.sh` checks
-the flags before launch. Use both for every GPU run.
+`-ts 0.55,0.45` is the most the display card is allowed to give up: 12.85 GiB instead
+of 15.2 GiB, at the same decode speed (22.37 vs 21.99 tok/s), because the display card
+is the slower of the two and every layer moved off it helps. Load takes ~2.5 min. The
+display card must stay under 18 GiB total (model + desktop); `scripts/scion/gpu_run.sh`
+enforces it at runtime and `scripts/scion/gpu_guard.sh` checks the flags before launch.
+Use both for every GPU run.
 
 ## Results
 
@@ -167,6 +170,9 @@ Consequences:
 
 New measurements go here, newest first, with the command and the machine state.
 
+- **2026-11-18** — `-ts 0.55,0.45` replaces 0.5/0.5 as the default: 22.37 tok/s (44.71 ms)
+  against 21.99 (45.48), and the display card's model buffer drops from 15.2 to 12.85 GiB.
+  Same speed within run-to-run variance, 2.3 GiB more headroom under the 18 GiB cap.
 - **2026-11-18** — decode attribution, superseding the "weight-bandwidth bound" reading below.
   The dense GEMV is not the limit: cold-cache `scion-gemv-bench` on the real shape gives
   299 GB/s for Q6_K, 336 for Q8_0, 311 for Q5_K, 426 for F16 (F16 loses on wall time:
