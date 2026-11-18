@@ -116,6 +116,11 @@ New measurements go here, newest first, with the command and the machine state.
   from the mmap; that copy wedged in `kfd_wait_on_events` on `blk.41.ffn_up_exps.weight`
   (175 MiB to the display card) with no I/O and no VRAM change. `HSA_ENABLE_SDMA=0` did
   not help, `SCION_LOAD_STAGE_MIB=32` did.
+- **2026-11-18** — decode attribution on the all-GPU 176B: prefill 861 tok/s at a 5270-token
+  prompt; decode 21.6 tok/s at 5.3k context vs 19.2 at 57 tokens, so decode is flat in
+  context and weight-bandwidth bound. `GGML_CUDA_DISABLE_GRAPHS=1` gives 20.0 tok/s, so HIP
+  graphs are not a lever. Per token the model reads ~4.25 GB (3.74 GB dense, 0.52 GB active
+  experts): decode is dense-bound, not expert-bound.
 - **2026-11-18** — per-layer MoE banks: 365 slots/layer at 9 GiB, decode hit rate 58.52%,
   identical to the global LRU. The pool was not contended; no speedup.
 - **2026-11-17** — `TQ1_0_G128` MMQ: 13/13 against the CPU reference; neutral for the 176B
