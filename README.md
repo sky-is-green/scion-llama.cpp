@@ -216,6 +216,12 @@ card (66.5 vs 78.1 tok/s) and only beats the layer split (47.4).
 
 New measurements go here, newest first, with the command and the machine state.
 
+- **2026-11-18** — `-ub 256` is not the lever for the spare's VRAM. Spare peak 19324 MiB
+  against 19410 at the default 512, display 15151 against 15239, while prefill drops from
+  216 to 176 t/s and decode is unchanged within noise (33.4 vs 32.3). The meta compute
+  buffer is 78.5 MiB, so the spare's ~19 GiB is the resident split of the weights (0.6 of
+  the split tensors plus the whole mirrored set), not a ubatch-sized spike. Keep the
+  default ubatch.
 - **2026-11-18** — tensor-parallel split works for qwen4exp: 176B decode **22.0 → 32.3 tok/s**
   (`-sm tensor -ts 0.6,0.4`), prefill 216-294 tok/s, at spare 19.0 / display 14.9 GiB.
   Three fixes were needed: the staged loader could not feed the meta buffer its required
