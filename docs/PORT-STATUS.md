@@ -38,20 +38,18 @@ The 35B subset30 evaluation is running against the v1 server; results will be ad
 
 ## Measured limits (2026-11-18)
 
+- **All-GPU 176B works**: `-ncmoe 0 -ts 0.5,0.5` loads (1228 tensors, ~2.5 min) and runs **prefill 200 t/s, decode 22.0 t/s** (358-token prompt, 64 generated). A 32k-token prompt is ~2.7 min. A short 57-token prompt reports 27 t/s prefill because the fixed per-request overhead dominates.
+- **Why the all-GPU load used to hang**: copying a device tensor straight out of the mmap wedges the KFD on gfx1100 + ROCm 7.2.4. It reproducibly stopped on `blk.41.ffn_up_exps.weight` (175 MiB to the display card) with no disk I/O, no VRAM change, two threads in `kfd_wait_on_events`, and `HSA_ENABLE_SDMA=0` made no difference. The DMA engine faults the mmap pages in itself and the wait never returns. `SCION_LOAD_STAGE_MIB` (default 32) stages the copy through resident memory in chunks.
+- **Host-expert layouts** (`-ncmoe 24`, 9 GiB MoE cache) are 50-400x slower than all-GPU: prefill 0.25-0.56 t/s, decode 0.04-0.14 t/s, with 27 CPU↔GPU splits per decode step and most time in per-split fence waits.
 - **`TQ1_0_G128` MMQ**: correct (`test-backend-ops` 13/13) but neutral for this workload; decode uses MMVQ. `SCION_DISABLE_TQ1_MMQ=1` turns it off.
 - **MoE cache policy**: per-layer slot banks (as in the Prism fork's `--moe-slot-cache`) are implemented. On the 176B they change nothing: decode hit rate is 58.52% and uploaded bytes are identical with either the global LRU or per-layer banks, so the global pool was not contended. `--moe-cache-mib 9000` gives 365 slots per layer (71% of each layer's experts, ~36 tokens of history).
-- **PCIe is not the limit**: 13.6 GB/s host→device from both resident memory and the compressed model mmap (256 MB probe).
+- **PCIe is not the limit**: 13.6 GB/s host→device from both resident memory and the compressed model mmap (256 MB probe). Fence waits on an idle stream are 0.019 ms.
 - **CPU expert compute is not the limit**: with `--moe-cache-cpu-share 1.0` the log reports `0 on the CPU`; MMQ support makes `ggml_backend_offload_op(MUL_MAT_ID)` true, which disables the CPU-share path entirely, so all misses are uploaded and computed on the device.
-- **Decode profile** (`ncmoe 24`, 8 tokens, 21-25 s/token): two threads at ~130% CPU, 17 threads idle in `futex_wait`, two in `kfd_wait_on_events`, one page-faulting, both GPUs at 0-13%. The cost is per-split CPU↔GPU synchronization, not bytes moved: the decode graph has 27 splits. The 35B, which is a single backend, runs 49-76 tok/s with the same runtime.
-- **All-GPU load**: buffers allocate correctly at `-ts 0.5,0.5` (14.7 GiB spare + 15.2 GiB display), and the loader then copies ~1070 of ~1300 tensors, including 175 MiB expert banks at ~4.6 GB/s. It hangs on `blk.41.ffn_up_exps.weight` (175 MiB) to the display card: no disk I/O, no VRAM change, two threads blocked in `kfd_wait_on_events`. This reproduces at the same tensor in separate runs and is unaffected by `HSA_ENABLE_SDMA=0`. It is a driver-level copy hang, not capacity, bandwidth, or our code, and it is what has blocked every single-backend layout.
-- **`ncmoe 12`**: loads in 33 s, then produces no token in the first graph. Same family of failure.
-
-Consequence: on this ROCm 7.2.4 stack the 176B is limited by per-split fence latency, so making it fast needs a single-backend (all-experts-on-GPU) graph, which the same runtime cannot load or execute. The 35B is the only local configuration that fits one backend.
 
 ## Known limits
 
-- **176B speed on this host**: the fully-resident GPU layout stalls in the ROCm loader (same as the fork), so 24 layers' experts stay in host RAM. v1's MoE cache defaults to uploading misses to the GPU (`--moe-cache-cpu-share 0`), which makes the 176B decode ~0.2 tok/s. `--moe-cache-cpu-share 1.0` plus `--moe-cache-mib 9000` is the working split: decode 7.45 tok/s at 24 host layers in the one clean measurement, prefill still ~0.55 tok/s.
-- **176B prefill**: host-resident expert layers are processed essentially per token, so prompt processing runs at decode-like speed. With 24 host layers that is 0.3-0.6 tok/s regardless of MMQ. Prefill, not decode, is what makes a 30x32k overnight run infeasible on this box.
+- **176B speed on this host**: use the fully-resident GPU layout: `-ncmoe 0 -ts 0.5,0.5 --moe-cache-mib 0 -ot per_layer_token_embd=CPU`. It loads in ~2.5 min and runs prefill 200 t/s, decode 22 t/s.
+- **176B prefill**: 200 t/s all-GPU; 0.25-0.56 t/s whenever experts are host-resident.
 - **CPU governor / GPU contention**: results are very sensitive to load on the display card. A game using card1 cut the 35B from 75.9 to 17.4 tok/s and the 176B by ~100x; measure only with the display card idle.
 - **176B sidecar acceptance**: the fc3 chain is implemented, but the release's offline 1.81 tokens/step has not yet been re-measured in-engine on v1.
 - **ROCm 10.1**: the 2026-11-17 system update broke `hipMemcpyAsync` for every HIP binary (including stock v1.0.0 and the system llama.cpp). The 7.2.4 runtime is extracted under `work/rocm-7.2.4` and selected with `LD_LIBRARY_PATH`; this is a host workaround, not a port requirement.
