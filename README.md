@@ -61,18 +61,27 @@ Everything that is not the PLE table fits in the two cards; the PLE stays host-m
 ```bash
 export LD_LIBRARY_PATH=$W/rocm-7.2.4/opt/rocm/lib:$W/rocm-7.2.4/usr/lib
 export HIP_VISIBLE_DEVICES=1,0
+
+# fast: both cards work on every token (tensor parallel, 32 tok/s)
 ./build-hip/bin/llama-cli -m Scion-FlashNext-176B-A6B-Q6_K.gguf \
-  --device ROCm0,ROCm1 -ts 0.55,0.45 -ngl 99 -ncmoe 0 --moe-cache-mib 0 \
+  --device ROCm0,ROCm1 -sm tensor -ts 0.6,0.4 -ngl 99 -ncmoe 0 --moe-cache-mib 0 \
+  -ot per_layer_token_embd=CPU -c 4096 -fit off \
+  -p "The capital of France is" -n 16 -st --temp 0 --top-k 1 --top-p 1 -s 1001
+
+# conservative: half the layers per card (22 tok/s), 4 GiB more spare VRAM
+./build-hip/bin/llama-cli -m Scion-FlashNext-176B-A6B-Q6_K.gguf \
+  --device ROCm0,ROCm1 -sm layer -ts 0.55,0.45 -ngl 99 -ncmoe 0 --moe-cache-mib 0 \
   -ot per_layer_token_embd=CPU -c 4096 -fit off \
   -p "The capital of France is" -n 16 -st --temp 0 --top-k 1 --top-p 1 -s 1001
 ```
 
-`-ts 0.55,0.45` is the most the display card is allowed to give up: 12.85 GiB instead
-of 15.2 GiB, at the same decode speed (22.37 vs 21.99 tok/s), because the display card
-is the slower of the two and every layer moved off it helps. Load takes ~2.5 min. The
-display card must stay under 18 GiB total (model + desktop); `scripts/scion/gpu_run.sh`
-enforces it at runtime and `scripts/scion/gpu_guard.sh` checks the flags before launch.
-Use both for every GPU run.
+The tensor split is the fast path and keeps the display card at ~15 GiB, but the spare
+ends up at ~19.0 of 20.0 GiB, so use the layer split when you need spare headroom (for a
+longer context). `-ts 0.6,0.4` is the balanced point: `0.65,0.35` runs the spare out of
+memory and `0.5,0.5` puts the display at 18.0 GiB. Load takes ~2.5 min. The display card
+must stay under 18 GiB total (model + desktop); `scripts/scion/gpu_run.sh` now enforces it
+for the whole run, and `scripts/scion/gpu_guard.sh` checks the flags before launch. Use
+both for every GPU run.
 
 ## Results
 
@@ -125,7 +134,7 @@ Where the time actually goes, all measured on this box:
 | same model, `-ts` 0.9/0.1 / 0.75/0.25 / 0.6/0.4 | 15.6 / 17.1 / 21.3 ms |
 | 176B, tokens per step 1 / 2 / 4 | 42.7 / 47.0 / 61.9 ms |
 | 1-token graph | 4138 kernels, only 929 matmuls |
-| PLE gather on CPU | 7.0 ms/token |
+| PLE serial preads | 7.0 ms (the existing prefetch hides most of it) |
 
 Consequences:
 
@@ -136,20 +145,57 @@ Consequences:
   A second token per step costs only 10%, which is the same fact from the other
   side: the step has a large fixed cost that more tokens amortize.
 - **`-sm row` cannot be used**: the HIP backend has no split-buffer type
-  (`device ROCm0 does not support split buffers`). `-sm tensor` reaches the
-  `Meta()` buffer and aborts; the meta-device split mapping does not cover
-  qwen4exp's `attn_qkv`/`attn_gate`/`ssm_out`/`hc_*` tensors.
+  (`device ROCm0 does not support split buffers`). `-sm tensor` works after the loader,
+  meta-backend and guard fixes described under Tensor-parallel split below.
 - **3209 of 4138 kernels are not matmuls** (560 ADD, 448 SCALE, 372 MUL, 256
   RMS_NORM, 230 SIGMOID, 151 GET_ROWS, 150 CPY, 134 SILU, ...). Upstream's
   `GGML_CUDA_GRAPH_OPT=1`, which only fuses the gate/up GLU pair, gives
   21.68 tok/s against 21.99 — no help.
-- **The PLE is a 7 ms/token CPU stall.** `per_layer_token_embd` is a 26.8 GiB Q4_0
-  table kept on the CPU and memory-mapped from a zstd btrfs file; a token reads 48
-  scattered 90-byte rows, which costs 7.0 ms median (5.6 ms best, 68 ms worst).
-  Both GPUs idle for that time.
+- **The PLE gather is not the stall the raw number suggests.** The 26.8 GiB Q4_0
+  `per_layer_token_embd` lives on the CPU as a zstd btrfs mmap, and a token reads 48
+  scattered 90-byte rows; serial preads of those rows cost 7.0 ms median. The model
+  already calls `llama_prefetch_rows`, which issues `madvise(MADV_WILLNEED)` for every
+  row before the gather, and forcing them in from 8 threads as well gave 31.7 tok/s
+  against 32.7 without it.
 - **Speculative decoding does not pay with this drafter**: `draft-mtp` with
   `scion-mtp-sidecar-v2.gguf` accepts 11.1% at k=2 and 5.9% at k=4, for 18.5 and
   15.2 tok/s against 22.0 plain.
+
+### Tensor-parallel split (2026-11-18)
+
+`-sm tensor` puts a slice of every weight matrix on each card instead of half the layers,
+so both cards work on every token. On this fork it needed three fixes:
+
+- the staged loader fed the meta buffer fixed 32 MiB pieces, but that buffer requires whole
+  slabs (`size % nb[axis + 1] == 0`), so it now stages a meta tensor whole;
+- the Scion correction branches do `mul_mat(mirrored lora_a, row-parallel activation)`,
+  which the meta backend did not implement; it now produces a PARTIAL sum that is
+  all-reduced like the other column-parallel cases;
+- `gpu_run.sh` only checked the display cap when the loader printed per-card buffer sizes,
+  which a meta buffer never does; it now also accepts a VRAM plateau and keeps enforcing
+  the cap for the whole run.
+
+176B, 358-token prompt, greedy, display card also running the desktop:
+
+| layout | prefill | decode | spare | display |
+|---|---:|---:|---:|---:|
+| layer 0.55/0.45 | 231 t/s | 22.0 tok/s | 15.5 GiB | 12.6 GiB |
+| tensor 0.5/0.5 | 294 t/s | 31.7 tok/s | 16.2 GiB | **18.0 GiB** |
+| tensor 0.57/0.43 | 221 t/s | 32.8 tok/s | 16.5 GiB | 17.4 GiB |
+| tensor 0.6/0.4 | 216 t/s | 32.3 tok/s | **19.0 GiB** | 14.9 GiB |
+
+The layer row is the loader's model buffer; the tensor rows are sysfs peaks for the whole
+run (model + compute + desktop), which is the number the 18 GiB rule is about.
+
+**Use `-ts 0.6,0.4`**: it is the only split that keeps the display card comfortably under
+its 18 GiB cap, at the cost of the spare sitting at 19.0 of 20.0 GiB. `0.65,0.35` runs the
+spare out of memory. The split is steep between 0.4 and 0.43 because a whole tensor (or a
+device-sized allocation) moves at that step, so do not interpolate these numbers.
+
+The output is not bit-identical to the layer split: each device sums half of the reduction
+axis, so greedy decoding follows the same text for ~600 characters and then picks an
+equivalent wording. For the 35B, which fits on one card, tensor split is slower than one
+card (66.5 vs 78.1 tok/s) and only beats the layer split (47.4).
 
 ### 35B A3B, all GPU
 
@@ -170,6 +216,19 @@ Consequences:
 
 New measurements go here, newest first, with the command and the machine state.
 
+- **2026-11-18** — tensor-parallel split works for qwen4exp: 176B decode **22.0 → 32.3 tok/s**
+  (`-sm tensor -ts 0.6,0.4`), prefill 216-294 tok/s, at spare 19.0 / display 14.9 GiB.
+  Three fixes were needed: the staged loader could not feed the meta buffer its required
+  whole slabs, the meta backend had no `mul_mat(MIRRORED weight, AXIS_0 activation)` case
+  for the Scion correction branches (now a PARTIAL sum), and `gpu_run.sh` skipped the
+  display cap because a meta buffer prints no per-card report (now enforced continuously,
+  from a VRAM plateau when there is no report). Output is not bit-identical: greedy text
+  matches for ~600 characters, then takes an equivalent wording, because each device sums
+  half the reduction axis. 35B: 47.4 → 66.5 tok/s, still below 78.1 on one card.
+- **2026-11-18** — PLE prefetch is already good: forcing the 48 scattered rows in from 8
+  threads (`SCION_PLE_TOUCH=1`) gave 31.7 tok/s against 32.7 without it, so the existing
+  `madvise(MADV_WILLNEED)` in `llama_prefetch_rows` already overlaps the reads. The earlier
+  7.0 ms figure measured serial preads without that prefetch; it is not the model's cost.
 - **2026-11-18** — `-ts 0.55,0.45` replaces 0.5/0.5 as the default: 22.37 tok/s (44.71 ms)
   against 21.99 (45.48), and the display card's model buffer drops from 15.2 to 12.85 GiB.
   Same speed within run-to-run variance, 2.3 GiB more headroom under the 18 GiB cap.

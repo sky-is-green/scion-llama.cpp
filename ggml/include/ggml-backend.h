@@ -445,6 +445,11 @@ extern "C" {
     GGML_API ggml_backend_dev_t ggml_backend_meta_device(
         ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud);
 
+    // true when the buffer composes tensors from per-device pieces (see the split state above).
+    // such a buffer requires set_tensor calls that cover whole slabs: offset and size must be
+    // multiples of tensor->nb[axis + 1], so a loader cannot feed it in fixed-size pieces.
+    GGML_API bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buffer);
+
     //
     // Utils
     //

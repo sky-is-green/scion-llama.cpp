@@ -56,16 +56,61 @@ All numbers measured on this box with the display loaded.
   elementwise/norm/activation/copy (560 ADD, 448 SCALE, 372 MUL, 256 RMS_NORM, 230
   SIGMOID, 151 GET_ROWS, 150 CPY, 134 SILU). `GGML_CUDA_GRAPH_OPT=1` only fuses the
   gate/up GLU pair and gives 21.68 against 21.99 tok/s.
-- **The PLE costs 7.0 ms/token on the CPU.** 48 scattered 90-byte reads into the 26.8 GiB
-  Q4_0 `per_layer_token_embd` (zstd btrfs mmap): median 7.01 ms, best 5.63, worst 67.8.
-  Both GPUs are idle during it.
-- **Parallel split modes are unavailable.** `-sm row`: `device ROCm0 does not support split
-  buffers` (the HIP backend has no split buffer type). `-sm tensor`: aborts right after
-  the `Meta()` buffer allocation; `llama_meta_device_get_split_state` does not map
-  qwen4exp's `attn_qkv` / `attn_gate` / `ssm_out` / `hc_*` tensors.
+- **The PLE gather is already prefetched.** 48 scattered 90-byte reads into the 26.8 GiB
+  Q4_0 `per_layer_token_embd` (zstd btrfs mmap) cost 7.01 ms median when done serially, but
+  `llama_prefetch_rows` already issues `madvise(MADV_WILLNEED)` for every row first.
+  Forcing the rows in from 8 threads as well gave 31.7 tok/s against 32.7 without it.
+- **Parallel split modes**: `-sm row` is unavailable (`device ROCm0 does not support split
+  buffers`; the HIP backend has no split buffer type). `-sm tensor` works after the three
+  fixes above.
 - **Speculative decoding with the current drafter loses.** `draft-mtp` +
   `scion-mtp-sidecar-v2.gguf`: 11.1% acceptance at k=2 (18.5 tok/s) and 5.9% at k=4
   (15.2 tok/s), against 22.0 plain.
+
+## Tensor-parallel split (2026-11-18)
+
+`-sm tensor` is usable for qwen4exp after three fixes:
+
+1. **Loader**: `ggml_backend_meta_buffer_set_tensor` requires offset and size to be
+   multiples of `tensor->nb[axis + 1]`. The staged copy fed it fixed 32 MiB pieces and hit
+   `GGML_ASSERT(size % chunk_size_full == 0)` on the first tensor. `llama-model-loader.cpp`
+   now stages a meta tensor whole (the staging is still what keeps the DMA source resident).
+2. **Meta backend**: the Scion correction branches do `mul_mat(mirrored lora_a, AXIS_0
+   activation)` and the meta backend aborted with "unsupported mul_mat split states". That
+   is a column-parallel matmul whose per-device results are partial sums; it now returns
+   PARTIAL, which the backend already all-reduces.
+3. **Guard**: `gpu_run.sh` waited for per-card `model buffer size` lines, which a meta
+   buffer never prints, so the display cap was never checked for these runs. It now also
+   accepts a VRAM plateau and enforces the cap continuously for the whole run.
+
+176B, 358-token prompt, greedy:
+
+| layout | prefill | decode | spare | display |
+|---|---:|---:|---:|---:|
+| layer 0.55/0.45 | 231 t/s | 22.0 tok/s | 15.5 GiB | 12.6 GiB |
+| tensor 0.5/0.5 | 294 t/s | 31.7 tok/s | 16.2 GiB | 18.0 GiB |
+| tensor 0.57/0.43 | 221 t/s | 32.8 tok/s | 16.5 GiB | 17.4 GiB |
+| tensor 0.6/0.4 | 216 t/s | 32.3 tok/s | 19.0 GiB | 14.9 GiB |
+
+The layer row is the loader's model buffer; the tensor rows are sysfs peaks for the whole
+run (model + compute + desktop).
+
+`0.65/0.35` runs the spare out of memory. The usable point is `0.6/0.4`; the display card
+is the one with the hard cap, and it is the one this split protects.
+
+Numerics: not bit-identical to the layer split. Each device sums half of the reduction
+axis, so greedy decoding follows the same text for ~600 characters and then picks an
+equivalent wording. Both were checked against the layer-split output on the same prompt
+and seed.
+
+## PLE prefetch (negative result, 2026-11-18)
+
+`per_layer_token_embd` is a 26.8 GiB Q4_0 table on the CPU, read as ~48 scattered 90-byte
+rows per token. Serial preads of those rows cost 7.0 ms median, but the model already calls
+`llama_prefetch_rows` (which issues `madvise(MADV_WILLNEED)` for all rows) before the
+gather. Forcing the rows in from 8 threads as well gave 31.7 tok/s against 32.7 without it,
+so the existing prefetch already overlaps the reads and the 7.0 ms figure is not the
+model's cost.
 
 ## Measured limits (2026-11-18)
 

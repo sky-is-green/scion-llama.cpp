@@ -64,7 +64,34 @@ set +m
 # and the next run fails to allocate (or silently drops to a different layout).
 trap 'kill -TERM -"$pid" 2>/dev/null; sleep 1; kill -KILL -"$pid" 2>/dev/null' EXIT INT TERM
 
-# Wait for the loader's per-card buffer report.
+vram_mib() {
+    echo $(( $(cat "$VRAM_USED" 2>/dev/null || echo 0) / 1024 / 1024 ))
+}
+
+# Enforce the display cap for the whole run, starting now. This cannot wait for the
+# loader: a tensor-parallel (meta) buffer prints one total instead of the per-card
+# report the check below looks for, and the cap has to hold either way. It also
+# covers allocations that grow later (KV and compute buffers grow with context).
+(
+    while kill -0 "$pid" 2>/dev/null; do
+        cur=$(vram_mib)
+        if [ "$cur" -ge "$DISPLAY_CAP_MIB" ]; then
+            echo "gpu_run: display total=${cur} MiB >= cap=${DISPLAY_CAP_MIB} MiB; killing $pid" >&2
+            kill -TERM -"$pid" 2>/dev/null
+            sleep 2
+            kill -KILL -"$pid" 2>/dev/null
+            exit 3
+        fi
+        sleep 2
+    done
+) &
+cap_mon=$!
+echo "gpu_run: display cap monitor active (cap=${DISPLAY_CAP_MIB} MiB)" >&2
+
+# Wait for the loader's per-card buffer report, for the informational check below.
+# A tensor-parallel run prints one "Meta() model buffer size" instead and never the
+# per-card lines, so that line is the signal to stop waiting. The monitor above is
+# what enforces the cap; this is only the message.
 found=0
 for _ in $(seq 1 600); do
     if grep -q "ROCm0 model buffer size" "$LOG" 2>/dev/null && \
@@ -72,32 +99,50 @@ for _ in $(seq 1 600); do
         found=1
         break
     fi
+    if grep -q "Meta() model buffer size" "$LOG" 2>/dev/null; then
+        found=2
+        break
+    fi
     if ! kill -0 "$pid" 2>/dev/null; then
-        wait "$pid"
-        exit $?
+        found=3
+        break
     fi
     sleep 1
 done
 
-if [ "$found" -ne 1 ]; then
-    echo "gpu_run: no buffer report after 600 s; killing $pid" >&2
-    kill -KILL "$pid" 2>/dev/null
-    wait "$pid" 2>/dev/null
-    exit 2
+# A run without -v writes little, so its buffered lines may only reach the file when
+# the process exits. If the loop ended because the child went away, check once more.
+if [ "$found" -eq 0 ] || [ "$found" -eq 3 ]; then
+    if grep -q "Meta() model buffer size" "$LOG" 2>/dev/null; then
+        found=2
+    elif grep -q "ROCm0 model buffer size" "$LOG" 2>/dev/null && \
+         grep -q "ROCm1 model buffer size" "$LOG" 2>/dev/null; then
+        found=1
+    fi
 fi
 
-# Hard cap: the display's actual total VRAM, including the desktop.
-used_bytes=$(cat "$VRAM_USED" 2>/dev/null || echo 0)
-used_mib=$((used_bytes / 1024 / 1024))
-if awk -v u="$used_mib" -v c="$DISPLAY_CAP_MIB" 'BEGIN { exit !(u < c) }'; then
-    echo "gpu_run: OK display total=${used_mib} MiB < cap=${DISPLAY_CAP_MIB} MiB" >&2
+if [ "$found" -eq 3 ]; then
+    wait "$pid"
+    rc=$?
+    kill "$cap_mon" 2>/dev/null
+    wait "$cap_mon" 2>/dev/null
+    exit $rc
+fi
+
+used_mib=$(vram_mib)
+if [ "$found" -eq 1 ]; then
+    if awk -v u="$used_mib" -v c="$DISPLAY_CAP_MIB" 'BEGIN { exit !(u < c) }'; then
+        echo "gpu_run: OK display total=${used_mib} MiB < cap=${DISPLAY_CAP_MIB} MiB" >&2
+    else
+        echo "gpu_run: REFUSING display total=${used_mib} MiB >= cap=${DISPLAY_CAP_MIB} MiB; killing $pid" >&2
+        kill -TERM "$pid" 2>/dev/null
+        sleep 2
+        kill -KILL "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+        exit 3
+    fi
 else
-    echo "gpu_run: REFUSING display total=${used_mib} MiB >= cap=${DISPLAY_CAP_MIB} MiB; killing $pid" >&2
-    kill -TERM "$pid" 2>/dev/null
-    sleep 2
-    kill -KILL "$pid" 2>/dev/null
-    wait "$pid" 2>/dev/null
-    exit 3
+    echo "gpu_run: no per-card report (tensor-parallel buffer?); monitor enforcing cap at ${used_mib} MiB" >&2
 fi
 
 # Load-progress check: a real stall produces no further log line. A big expert
@@ -126,3 +171,7 @@ if [ "$progress" -ne 1 ] && kill -0 "$pid" 2>/dev/null; then
 fi
 
 wait "$pid"
+rc=$?
+kill "$cap_mon" 2>/dev/null
+wait "$cap_mon" 2>/dev/null
+exit $rc

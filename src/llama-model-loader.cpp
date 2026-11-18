@@ -1872,11 +1872,17 @@ bool llama_model_loader::load_all_data(
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
-                if (stage_buf.empty()) {
-                    stage_buf.resize(stage_size);
+                // The meta (tensor-parallel) buffer composes each tensor from per-device
+                // slices and its set_tensor asserts that offset and size are multiples of
+                // tensor->nb[axis + 1]. Fixed-size pieces do not satisfy that, so stage a
+                // meta buffer's tensor whole; the staging is still what keeps the DMA
+                // source resident (see the note on stage_size above).
+                const size_t n_stage = ggml_backend_buffer_is_meta(cur->buffer) ? n_size : stage_size;
+                if (stage_buf.size() < n_stage) {
+                    stage_buf.resize(n_stage);
                 }
-                for (size_t off = 0; off < n_size; off += stage_size) {
-                    const size_t n = std::min(stage_size, n_size - off);
+                for (size_t off = 0; off < n_size; off += n_stage) {
+                    const size_t n = std::min(n_stage, n_size - off);
                     memcpy(stage_buf.data(), data + off, n);
                     ggml_backend_tensor_set(cur, stage_buf.data(), off, n);
                 }
