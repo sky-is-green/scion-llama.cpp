@@ -36,6 +36,17 @@ Branch: `scion-base`.
 
 The 35B subset30 evaluation is running against the v1 server; results will be added when it finishes.
 
+## Measured limits (2026-11-18)
+
+- **`TQ1_0_G128` MMQ**: correct (`test-backend-ops` 13/13) but neutral for this workload; decode uses MMVQ. `SCION_DISABLE_TQ1_MMQ=1` turns it off.
+- **MoE cache policy**: per-layer slot banks (as in the Prism fork's `--moe-slot-cache`) are implemented. On the 176B they change nothing: decode hit rate is 58.52% and uploaded bytes are identical with either the global LRU or per-layer banks, so the global pool was not contended. `--moe-cache-mib 9000` gives 365 slots per layer (71% of each layer's experts, ~36 tokens of history).
+- **PCIe is not the limit**: 13.6 GB/s host→device from both resident memory and the compressed model mmap (256 MB probe).
+- **CPU expert compute is not the limit**: with `--moe-cache-cpu-share 1.0` the log reports `0 on the CPU`; MMQ support makes `ggml_backend_offload_op(MUL_MAT_ID)` true, which disables the CPU-share path entirely, so all misses are uploaded and computed on the device.
+- **Decode profile** (`ncmoe 24`, 8 tokens, 21-25 s/token): two threads at ~130% CPU, 17 threads idle in `futex_wait`, two in `kfd_wait_on_events`, one page-faulting, both GPUs at 0-13%. The cost is per-split CPU↔GPU synchronization, not bytes moved: the decode graph has 27 splits. The 35B, which is a single backend, runs 49-76 tok/s with the same runtime.
+- **Host-layer scaling does not help**: `ncmoe 12` loads in 33 s and then produces no token for minutes (first-graph stall), like `ncmoe 0`. Only the 24-host-layer layout runs at all.
+
+Consequence: on this ROCm 7.2.4 stack the 176B is limited by per-split fence latency, so making it fast needs a single-backend (all-experts-on-GPU) graph, which the same runtime cannot load or execute. The 35B is the only local configuration that fits one backend.
+
 ## Known limits
 
 - **176B speed on this host**: the fully-resident GPU layout stalls in the ROCm loader (same as the fork), so 24 layers' experts stay in host RAM. v1's MoE cache defaults to uploading misses to the GPU (`--moe-cache-cpu-share 0`), which makes the 176B decode ~0.2 tok/s. `--moe-cache-cpu-share 1.0` plus `--moe-cache-mib 9000` is the working split: decode 7.45 tok/s at 24 host layers in the one clean measurement, prefill still ~0.55 tok/s.
