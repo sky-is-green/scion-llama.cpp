@@ -93,12 +93,68 @@ Output matches the host-split configuration on the same prompt and seed.
 `-ncmoe 24 --moe-cache-mib 9000 --moe-cache-cpu-share 1.0`: prefill 0.25-0.56 tok/s,
 decode 0.04-0.14 tok/s. 27 CPU/GPU splits per decode step dominate; kept only for debugging.
 
+### Decode attribution (2026-11-18)
+
+The 176B is **not** bandwidth-bound at batch 1. Per-token bytes are ~4.26 GB
+(3.74 dense + 0.52 active experts), but a cold-cache microbenchmark of the actual
+weight shapes shows the kernel is not the limit:
+
+`scion-gemv-bench -k 2560 -m 10240` (8-24 distinct cold copies, f32 activations):
+
+| type | bytes/call | time | GB/s |
+|---|---:|---:|---:|
+| `Q6_K` | 26.8 MB | 72 µs | 299 |
+| `Q5_K` | 22.5 MB | 58 µs | 311 |
+| `Q8_0` | 34.8 MB | 83 µs | 336 |
+| `Q4_0` | 18.4 MB | 68 µs | 217 |
+| `F16` | 52.4 MB | 123 µs | 426 |
+
+F16 wins on GB/s and loses on wall time: 2.4x the bytes makes it 1.7x slower than
+Q6_K. That closes the "repack to F16 and use rocBLAS" idea.
+
+Where the time actually goes, all measured on this box:
+
+| observation | result |
+|---|---|
+| 176B effective bandwidth | 94 GB/s (vs 299 isolated) |
+| 35B, one card | 78.1 tok/s, 12.81 ms, 231 GB/s |
+| 35B, two cards 0.5/0.5 | 47.4 tok/s, 21.12 ms, 140 GB/s |
+| same model, `-ts` 0.9/0.1 / 0.75/0.25 / 0.6/0.4 | 15.6 / 17.1 / 21.3 ms |
+| 176B, tokens per step 1 / 2 / 4 | 42.7 / 47.0 / 61.9 ms |
+| 1-token graph | 4138 kernels, only 929 matmuls |
+| PLE gather on CPU | 7.0 ms/token |
+
+Consequences:
+
+- **The layer split is the dominant tax.** The same 35B weights run 1.65x slower
+  across two cards, and the penalty grows with the share given to the display card
+  (~0.35 ms per layer moved). Both cards sit at their 280 W cap and reach 1249 MHz
+  memory clock, and the clocks alternate — the cards run strictly one at a time.
+  A second token per step costs only 10%, which is the same fact from the other
+  side: the step has a large fixed cost that more tokens amortize.
+- **`-sm row` cannot be used**: the HIP backend has no split-buffer type
+  (`device ROCm0 does not support split buffers`). `-sm tensor` reaches the
+  `Meta()` buffer and aborts; the meta-device split mapping does not cover
+  qwen4exp's `attn_qkv`/`attn_gate`/`ssm_out`/`hc_*` tensors.
+- **3209 of 4138 kernels are not matmuls** (560 ADD, 448 SCALE, 372 MUL, 256
+  RMS_NORM, 230 SIGMOID, 151 GET_ROWS, 150 CPY, 134 SILU, ...). Upstream's
+  `GGML_CUDA_GRAPH_OPT=1`, which only fuses the gate/up GLU pair, gives
+  21.68 tok/s against 21.99 — no help.
+- **The PLE is a 7 ms/token CPU stall.** `per_layer_token_embd` is a 26.8 GiB Q4_0
+  table kept on the CPU and memory-mapped from a zstd btrfs file; a token reads 48
+  scattered 90-byte rows, which costs 7.0 ms median (5.6 ms best, 68 ms worst).
+  Both GPUs idle for that time.
+- **Speculative decoding does not pay with this drafter**: `draft-mtp` with
+  `scion-mtp-sidecar-v2.gguf` accepts 11.1% at k=2 and 5.9% at k=4, for 18.5 and
+  15.2 tok/s against 22.0 plain.
+
 ### 35B A3B, all GPU
 
 | measurement | value |
 |---|---:|
-| decode, clean box | 75.9 tok/s |
-| decode, with desktop GPU load | 49.5 tok/s |
+| decode, one card | 78.1 tok/s |
+| decode, two cards 0.5/0.5 | 47.4 tok/s |
+| decode with desktop GPU load | 49.5 tok/s |
 | tokens identical to the Prism fork | 16/16 |
 | drafter acceptance | 71.4% at 69.1 tok/s |
 
@@ -111,6 +167,27 @@ decode 0.04-0.14 tok/s. 27 CPU/GPU splits per decode step dominate; kept only fo
 
 New measurements go here, newest first, with the command and the machine state.
 
+- **2026-11-18** — decode attribution, superseding the "weight-bandwidth bound" reading below.
+  The dense GEMV is not the limit: cold-cache `scion-gemv-bench` on the real shape gives
+  299 GB/s for Q6_K, 336 for Q8_0, 311 for Q5_K, 426 for F16 (F16 loses on wall time:
+  123 µs vs 72 µs). In the model the 176B reaches only 94 GB/s. The gap is the two-card
+  layer split: the same 35B runs 78.1 tok/s on one card (231 GB/s) and 47.4 tok/s on two
+  (140 GB/s), with the penalty scaling at ~0.35 ms per layer moved to the display card.
+  Both cards are at their 280 W cap, reach 1249 MHz memory clock, and their clocks
+  alternate, so they run one at a time. `-sm row` is refused (no HIP split buffers);
+  `-sm tensor` aborts after the `Meta()` buffer allocation. Q6_K nwarps 2 -> 8 changes
+  nothing (45.47 vs 45.48 ms/token). `GGML_CUDA_GRAPH_OPT=1` gives 21.68 vs 21.99 tok/s.
+  The 1-token graph is 4138 kernels, only 929 of them matmuls. `per_layer_token_embd`
+  gather costs 7.0 ms/token on the CPU (48 scattered 90-byte rows from a 26.8 GiB
+  zstd-mapped Q4_0 table). The 176B `draft-mtp` sidecar accepts 11.1% at k=2 (18.5 tok/s)
+  and 5.9% at k=4 (15.2 tok/s), both worse than 22.0 plain.
+- **2026-11-18** — batching shows the step is fixed-cost dominated: 176B decode at 1, 2 and
+  4 tokens per step is 42.7, 47.0 and 61.9 ms/step (23.4, 42.6 and 64.6 tok/s aggregate).
+  Four times the work for 45% more time.
+- **2026-11-18** — `scion-gemv-bench` added (`tools/scion-gemv`): cold-cache batch-1 GEMV
+  timing for one shape, rotating through `-r` distinct copies so the 96 MB Infinity Cache
+  does not hold the matrix. `test-backend-ops perf` shapes fit in cache and report
+  ~1.8 TB/s, which is why they cannot be used for this.
 - **2026-11-18** — all-GPU 176B: 200 tok/s prefill, 22.0 tok/s decode, token parity with
   the host-split path. Blocked until the loader stopped copying device tensors straight
   from the mmap; that copy wedged in `kfd_wait_on_events` on `blk.41.ffn_up_exps.weight`

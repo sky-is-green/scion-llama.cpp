@@ -36,6 +36,37 @@ Branch: `scion-base`.
 
 The 35B subset30 evaluation is running against the v1 server; results will be added when it finishes.
 
+## Decode attribution (2026-11-18, supersedes earlier guesses)
+
+All numbers measured on this box with the display loaded.
+
+- **Not bandwidth-bound at batch 1.** Cold-cache GEMV (`tools/scion-gemv`, real 2560x10240
+  shape, 8-24 distinct copies): Q6_K 299 GB/s, Q5_K 311, Q8_0 336, Q4_0 217, F16 426.
+  F16 is 123 us against Q6_K's 72 us because it reads 2.4x the bytes. The model's own
+  effective rate is 94 GB/s, so the gap is not in the dot product.
+- **The two-card layer split is the largest single cost.** Same 35B weights, same session:
+  78.05 tok/s (12.81 ms) on one card, 47.35 (21.12 ms) on two. The penalty rises with the
+  display card's share: `-ts` 0.9/0.1 15.59 ms, 0.75/0.25 17.07, 0.6/0.4 21.28, 0.5/0.5
+  21.12. Both cards have a 280 W cap, both reach 1249 MHz memory clock, and their sclk
+  alternates during decode: the cards execute strictly one after the other.
+- **More tokens per step amortise it.** 176B decode at 1/2/4 tokens per step: 42.7/47.0/
+  61.9 ms, i.e. 23.4/42.6/64.6 tok/s aggregate. The step has ~35 ms that does not depend
+  on the token count.
+- **Kernel count**: the 1-token graph is 4138 nodes, 929 matmuls. The other 3209 are
+  elementwise/norm/activation/copy (560 ADD, 448 SCALE, 372 MUL, 256 RMS_NORM, 230
+  SIGMOID, 151 GET_ROWS, 150 CPY, 134 SILU). `GGML_CUDA_GRAPH_OPT=1` only fuses the
+  gate/up GLU pair and gives 21.68 against 21.99 tok/s.
+- **The PLE costs 7.0 ms/token on the CPU.** 48 scattered 90-byte reads into the 26.8 GiB
+  Q4_0 `per_layer_token_embd` (zstd btrfs mmap): median 7.01 ms, best 5.63, worst 67.8.
+  Both GPUs are idle during it.
+- **Parallel split modes are unavailable.** `-sm row`: `device ROCm0 does not support split
+  buffers` (the HIP backend has no split buffer type). `-sm tensor`: aborts right after
+  the `Meta()` buffer allocation; `llama_meta_device_get_split_state` does not map
+  qwen4exp's `attn_qkv` / `attn_gate` / `ssm_out` / `hc_*` tensors.
+- **Speculative decoding with the current drafter loses.** `draft-mtp` +
+  `scion-mtp-sidecar-v2.gguf`: 11.1% acceptance at k=2 (18.5 tok/s) and 5.9% at k=4
+  (15.2 tok/s), against 22.0 plain.
+
 ## Measured limits (2026-11-18)
 
 - **All-GPU 176B works**: `-ncmoe 0 -ts 0.5,0.5` loads (1228 tensors, ~2.5 min) and runs **prefill 200 t/s, decode 22.0 t/s** (358-token prompt, 64 generated). A 32k-token prompt is ~2.7 min. A short 57-token prompt reports 27 t/s prefill because the fixed per-request overhead dominates.
@@ -50,7 +81,7 @@ The 35B subset30 evaluation is running against the v1 server; results will be ad
 
 - **176B speed on this host**: use the fully-resident GPU layout: `-ncmoe 0 -ts 0.5,0.5 --moe-cache-mib 0 -ot per_layer_token_embd=CPU`. It loads in ~2.5 min and runs prefill 200 t/s, decode 22 t/s.
 - **176B prefill**: 200 t/s all-GPU; 0.25-0.56 t/s whenever experts are host-resident.
-- **CPU governor / GPU contention**: results are very sensitive to load on the display card. A game using card1 cut the 35B from 75.9 to 17.4 tok/s and the 176B by ~100x; measure only with the display card idle.
+- **Display load**: these are desktop-loaded numbers. A full-screen game on card1 is not the same thing and cuts the 35B to 17.4 tok/s and the 176B by ~100x; desktop compositing and video playback are part of the stated operating condition and are included in every number here.
 - **176B sidecar acceptance**: the fc3 chain is implemented, but the release's offline 1.81 tokens/step has not yet been re-measured in-engine on v1.
 - **ROCm 10.1**: the 2026-11-17 system update broke `hipMemcpyAsync` for every HIP binary (including stock v1.0.0 and the system llama.cpp). The 7.2.4 runtime is extracted under `work/rocm-7.2.4` and selected with `LD_LIBRARY_PATH`; this is a host workaround, not a port requirement.
 - **Backends**: CPU + HIP (gfx1100) only. No Metal/Vulkan validation.

@@ -510,6 +510,15 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
     if (table_id == MMVQ_PARAMETERS_RDNA3_0) {
         // RDNA3 (W7900): stricter whitelist than RDNA4.
         // Q2_K / Q5_K / IQ4_XS regress in full quant sweeps.
+        //
+        // Scion: Q6_K carries the 176B's dense weights and is the only whitelisted type
+        // capped at 2 warps here. Measured on gfx1100 at batch 1 (2560x10240, 16 cold
+        // copies): 2 warps and 8 warps are identical (45.47 vs 45.48 ms/token), so the
+        // cap is not what limits this model and the upstream value stays. The macro is
+        // kept so a rerun on another part can sweep it without editing the table.
+#ifndef SCION_MMVQ_Q6K_NWARPS
+#define SCION_MMVQ_Q6K_NWARPS 2
+#endif
         if (ncols_dst == 1) {
             switch (type) {
                 case GGML_TYPE_Q4_0:
@@ -519,7 +528,7 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
                 case GGML_TYPE_Q8_0:
                     return 8;
                 case GGML_TYPE_Q6_K:
-                    return 2;
+                    return SCION_MMVQ_Q6K_NWARPS;
                 case GGML_TYPE_IQ4_NL:
                     return 8;
                 default:
