@@ -10,6 +10,7 @@
 #include <array>
 #include <cinttypes>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <regex>
@@ -1798,6 +1799,18 @@ bool llama_model_loader::load_all_data(
 
     // staging buffer for non-host buffers without async uploads, reused because a fresh allocation per tensor page faults on every load
     std::vector<no_init<uint8_t>> read_buf;
+
+    // A device copy taken straight from the mmap can wedge the KFD on some
+    // runtime/driver combinations (gfx1100 + ROCm 7.2.4, a 175 MiB expert bank to the
+    // display card): the DMA engine faults the source pages in itself and the wait never
+    // returns. Copy through a resident buffer in bounded chunks so the DMA source is
+    // already faulted and no single copy is large.
+    const size_t stage_size = [] {
+        const char * s = getenv("SCION_LOAD_STAGE_MIB");
+        const long mib = s != nullptr ? strtol(s, nullptr, 10) : 32;
+        return (size_t) std::max(1L, mib)*MiB;
+    }();
+    std::vector<no_init<uint8_t>> stage_buf;
     if (getenv("SCION_TRACE_LOAD") != nullptr) {
         fprintf(stderr, "scion_load: begin, %zu tensors\n", tensors.size());
         fflush(stderr);
@@ -1859,7 +1872,14 @@ bool llama_model_loader::load_all_data(
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
-                ggml_backend_tensor_set(cur, data, 0, n_size);
+                if (stage_buf.empty()) {
+                    stage_buf.resize(stage_size);
+                }
+                for (size_t off = 0; off < n_size; off += stage_size) {
+                    const size_t n = std::min(stage_size, n_size - off);
+                    memcpy(stage_buf.data(), data + off, n);
+                    ggml_backend_tensor_set(cur, stage_buf.data(), off, n);
+                }
             }
         } else {
             const auto & file = files.at(weight->idx);
