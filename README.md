@@ -122,7 +122,8 @@ New measurements go here, newest first, with the command and the machine state.
   because decode uses MMVQ.
 - **2026-11-17** — 176B sidecar output identical to the Prism engine; 50% acceptance on a
   two-draft sample. 35B drafter 71.4% / 69.1 tok/s.
-- **2026-11-16** — 35B GPU 75.9 tok/s; 16/16 tokens identical to the Prism fork.
+- **pre-2026-11-17** — 35B GPU 75.9 tok/s on an idle box; 16/16 tokens identical to the
+  Prism fork.
 
 ## Layout
 
