@@ -1798,6 +1798,10 @@ bool llama_model_loader::load_all_data(
 
     // staging buffer for non-host buffers without async uploads, reused because a fresh allocation per tensor page faults on every load
     std::vector<no_init<uint8_t>> read_buf;
+    if (getenv("SCION_TRACE_LOAD") != nullptr) {
+        fprintf(stderr, "scion_load: begin, %zu tensors\n", tensors.size());
+        fflush(stderr);
+    }
     for (struct ggml_tensor * cur : tensors) {
         const auto * weight = get_weight(ggml_get_name(cur));
         if (weight == nullptr) {
@@ -1812,6 +1816,12 @@ bool llama_model_loader::load_all_data(
         }
 
         size_t n_size = ggml_nbytes(cur);
+
+        if (getenv("SCION_TRACE_LOAD") != nullptr) {
+            fprintf(stderr, "%9.3f scion_load: %-52s %8.2f MiB -> %s\n", ggml_time_ms()/1000.0, cur->name, n_size/1048576.0,
+                cur->buffer ? ggml_backend_buft_name(ggml_backend_buffer_get_type(cur->buffer)) : "none");
+            fflush(stderr);
+        }
 
         const bool from_mapping = use_mmap || lazy.has(cur);
 

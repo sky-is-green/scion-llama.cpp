@@ -100,10 +100,13 @@ else
     exit 3
 fi
 
-# 60 s load-progress check: a real stall produces no further log line.
+# Load-progress check: a real stall produces no further log line. A big expert
+# tensor copied from a cold compressed mmap can legitimately take minutes, so the
+# window is configurable (GPU_RUN_PROGRESS_S) and the load trace counts as progress.
+PROGRESS_S=${GPU_RUN_PROGRESS_S:-60}
 progress=0
-for _ in $(seq 1 60); do
-    if grep -qE "llama_model_load: model loaded|build_lora_branch|llama_context: constructing|prompt eval|eval time|print_timing" "$LOG" 2>/dev/null; then
+for _ in $(seq 1 "$PROGRESS_S"); do
+    if grep -qE "llama_model_load: model loaded|build_lora_branch|llama_context: constructing|prompt eval|eval time|print_timing|scion_load:" "$LOG" 2>/dev/null; then
         progress=1
         break
     fi
