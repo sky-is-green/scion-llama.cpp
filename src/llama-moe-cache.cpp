@@ -30,6 +30,13 @@ struct moe_cache_lru {
     int32_t n_slots  = 0;
     int32_t empty    = 0; // slot of the experts that are not cached
 
+    // Per-layer banks: each layer owns the contiguous slot range [base[il], base[il] + per_layer).
+    // A miss in one layer can therefore never evict another layer's working set, which is what
+    // keeps the hit rate stable when the hot set of the group is about as large as the cache.
+    int32_t per_layer = 0;
+    int32_t n_usable  = 0; // per_layer * number of layers in the group
+    std::vector<int32_t> base; // [n_layer] first slot of the layer, -1 if the group does not cache it
+
     // [n_layer] data of the slot maps, the experts at slot n_slots or later are not cached
     // the experts computed on the CPU read zero slots after the cached ones on the device
     std::vector<int32_t *> slot_map;
@@ -53,12 +60,18 @@ struct moe_cache_lru {
     std::vector<int32_t> misses;
     std::vector<uint64_t> token_zero; // [n_tokens] zero slots used by each token
 
-    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots) {
+    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots, int32_t per_layer, const std::vector<int32_t> & group_layers) {
         GGML_ASSERT(n_class == (int) std::log2(1.0f/(1.0f - std::exp2(-1.0f/crf_half_life))) + 1);
         this->n_expert = n_expert;
         this->n_slots  = n_slots;
         this->empty    = n_slots;
+        this->per_layer = per_layer;
+        this->n_usable  = per_layer * (int32_t) group_layers.size();
         slot_map.assign(n_layer, nullptr);
+        base.assign(n_layer, -1);
+        for (size_t i = 0; i < group_layers.size(); ++i) {
+            base[group_layers[i]] = (int32_t) i * per_layer;
+        }
         key_of.assign(n_slots, -1);
         prev.resize(n_slots);
         next.resize(n_slots);
@@ -139,9 +152,14 @@ struct moe_cache_lru {
         return seen[key_expert(key)] == seen_gen;
     }
 
-    // the least recently used slot of list c that this plan() does not select, -1 if none
+    // the least recently used slot of list c in the bank of layer il that this plan() does not select, -1 if none
     int32_t candidate(int c, int32_t il) const {
+        const int32_t lo = base[il];
+        const int32_t hi = lo + per_layer;
         for (int32_t s = head[c]; s >= 0; s = next[s]) {
+            if (s < lo || s >= hi) {
+                continue;
+            }
             if (!is_selected(il, key_of[s])) {
                 return s;
             }
@@ -189,6 +207,7 @@ struct moe_cache_lru {
         fills.clear();
         cpu.clear();
         n_hit = 0;
+        GGML_ASSERT(base[il] >= 0);
 
         if (++seen_gen == 0) {
             std::fill(seen.begin(), seen.end(), 0);
@@ -202,7 +221,7 @@ struct moe_cache_lru {
                 uniq.push_back(ids[i]);
             }
         }
-        if (uniq.size() > (size_t) n_slots) {
+        if (uniq.size() > (size_t) per_layer) {
             return false;
         }
 
@@ -513,7 +532,16 @@ struct llama_moe_cache::impl {
                 g.n_slots = 0;
                 continue;
             }
-            g.lru.init(model.layers.size(), n_expert, g.n_slots);
+            // per-layer banks: an equal slice of the budget per layer, so a layer's misses cannot evict another layer's hot set
+            const int32_t per_layer = (int32_t) (g.n_slots / g.layers.size());
+            if (per_layer < n_expert_used) {
+                LLAMA_LOG_WARN("%s: MoE cache budget is too small for a bank per layer (%d slots, %zu layers), they are not cached\n",
+                    __func__, per_layer, g.layers.size());
+                g.n_slots = 0;
+                continue;
+            }
+            g.n_slots = per_layer * (int32_t) g.layers.size();
+            g.lru.init(model.layers.size(), n_expert, g.n_slots, per_layer, g.layers);
             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
             n_tensors_host  += g.layers.size()*(n_zero > 0 ? 3 : 1); // slot maps and CPU map
         }
@@ -627,9 +655,9 @@ struct llama_moe_cache::impl {
                 ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0, 100.0*cpu_share);
             for (const group & g : groups) {
                 if (g.id == (int32_t) id) {
-                    LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%, %.1f tokens worth)\n", __func__,
-                        g.layers.size(), ggml_type_name(g.ref.back()->type), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]),
-                        (double) g.n_slots/(g.layers.size()*n_expert_used));
+                    LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots per layer (%.1f%%, %.1f tokens worth)\n", __func__,
+                        g.layers.size(), ggml_type_name(g.ref.back()->type), g.lru.per_layer,
+                        100.0*g.lru.per_layer/g.ref[0]->ne[2], (double) g.lru.per_layer/n_expert_used);
                 }
             }
         }
@@ -691,7 +719,7 @@ struct llama_moe_cache::impl {
         const layer & l = layers[il];
 
         // large batches use most experts of a layer, so they gain little from the cache and would evict the experts used in generation
-        if (n_tokens == 0 || n_tokens > max_batch || std::min(n_tokens*n_expert_used, l.slot_map->ne[1]) > groups[l.ig].n_slots) {
+        if (n_tokens == 0 || n_tokens > max_batch || std::min(n_tokens*n_expert_used, l.slot_map->ne[1]) > groups[l.ig].lru.per_layer) {
             return nullptr;
         }
         GGML_ASSERT(!cpu_part || l.slot_map_cpu != nullptr);
@@ -804,7 +832,7 @@ struct llama_moe_cache::impl {
         }
 
         // part of the misses is computed on the CPU once the cache is full, the carry keeps the share right on average
-        const uint32_t share_q = has_cpu && g.lru.n_filled == g.lru.n_slots ? cpu_share_q : 0;
+        const uint32_t share_q = has_cpu && g.lru.n_filled == g.lru.n_usable ? cpu_share_q : 0;
         auto n_cpu = [&](size_t n_miss) {
             const uint64_t acc = (uint64_t) n_miss*share_q + l.cpu_acc;
             l.cpu_acc = acc & 0xffff;
