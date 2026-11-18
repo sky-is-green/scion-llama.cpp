@@ -52,8 +52,17 @@ fi
 LOG=${GPU_RUN_LOG:-/tmp/opencode/gpu-run.log}
 : >"$LOG"
 
+# Run the child in its own process group (job control) so the cleanup trap below
+# can take down the whole group.
+set -m
 "$@" >"$LOG" 2>&1 &
 pid=$!
+set +m
+
+# The child gets its own process group so a timeout or Ctrl-C on this script takes
+# the model down with it. Without this, a killed run leaves llama-cli holding VRAM
+# and the next run fails to allocate (or silently drops to a different layout).
+trap 'kill -TERM -"$pid" 2>/dev/null; sleep 1; kill -KILL -"$pid" 2>/dev/null' EXIT INT TERM
 
 # Wait for the loader's per-card buffer report.
 found=0
