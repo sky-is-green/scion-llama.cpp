@@ -43,7 +43,8 @@ The 35B subset30 evaluation is running against the v1 server; results will be ad
 - **PCIe is not the limit**: 13.6 GB/s host→device from both resident memory and the compressed model mmap (256 MB probe).
 - **CPU expert compute is not the limit**: with `--moe-cache-cpu-share 1.0` the log reports `0 on the CPU`; MMQ support makes `ggml_backend_offload_op(MUL_MAT_ID)` true, which disables the CPU-share path entirely, so all misses are uploaded and computed on the device.
 - **Decode profile** (`ncmoe 24`, 8 tokens, 21-25 s/token): two threads at ~130% CPU, 17 threads idle in `futex_wait`, two in `kfd_wait_on_events`, one page-faulting, both GPUs at 0-13%. The cost is per-split CPU↔GPU synchronization, not bytes moved: the decode graph has 27 splits. The 35B, which is a single backend, runs 49-76 tok/s with the same runtime.
-- **Host-layer scaling does not help**: `ncmoe 12` loads in 33 s and then produces no token for minutes (first-graph stall), like `ncmoe 0`. Only the 24-host-layer layout runs at all.
+- **All-GPU load**: buffers allocate correctly at `-ts 0.5,0.5` (14.7 GiB spare + 15.2 GiB display), and the loader then copies ~1070 of ~1300 tensors, including 175 MiB expert banks at ~4.6 GB/s. It hangs on `blk.41.ffn_up_exps.weight` (175 MiB) to the display card: no disk I/O, no VRAM change, two threads blocked in `kfd_wait_on_events`. This reproduces at the same tensor in separate runs and is unaffected by `HSA_ENABLE_SDMA=0`. It is a driver-level copy hang, not capacity, bandwidth, or our code, and it is what has blocked every single-backend layout.
+- **`ncmoe 12`**: loads in 33 s, then produces no token in the first graph. Same family of failure.
 
 Consequence: on this ROCm 7.2.4 stack the 176B is limited by per-split fence latency, so making it fast needs a single-backend (all-experts-on-GPU) graph, which the same runtime cannot load or execute. The 35B is the only local configuration that fits one backend.
 
