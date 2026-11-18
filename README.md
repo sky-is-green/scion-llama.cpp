@@ -1,134 +1,133 @@
-# llama.cpp
+# scion-llama.cpp
 
-![llama.cpp](https://raw.githubusercontent.com/ggml-org/llama-brand/refs/heads/master/logo/svg/cover/llama-cpp/cover-llama-cpp-dark.svg)
+Scion's llama.cpp. Based on upstream [`ggml-org/llama.cpp`](https://github.com/ggml-org/llama.cpp)
+tag **v1.0.0** (`b1b770d90`), branch `scion-base`. This fork exists only to run the Scion
+models; it is not a general-purpose llama.cpp distribution and does not track upstream.
 
-<div align="center">
+MIT licensed, same as upstream.
 
-<b>LLM inference in C/C++</b>
+## Models
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp?filter=v*&color=brightgreen)](https://github.com/ggml-org/llama.cpp/releases?q=tag:v1)
-[![Nightly](https://img.shields.io/github/v/release/ggml-org/llama.cpp?label=nightly&filter=b*&color=orange)](https://github.com/ggml-org/llama.cpp/releases?q=b)
-[![Server](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/server.yml?label=Server)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
-[![Docker](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/docker.yml?label=Docker)](https://github.com/ggml-org/llama.cpp/actions/workflows/docker.yml)
-[![Winget](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/winget.yml?label=Winget)](https://github.com/ggml-org/llama.cpp/actions/workflows/winget.yml)
+| model | file | expert container |
+|---|---|---|
+| Scion 35B A3B | `Scion-35B-A3B-Q2_0_G128-corr-v1.gguf` | `Q2_0_G128` |
+| Scion 35B A3B base-router | `Scion-35B-A3B-Q2_0_G128-base-router-v1.gguf` | `Q2_0_G128` |
+| Scion FlashNext 176B A6B | `Scion-FlashNext-176B-A6B-Q6_K.gguf` | `TQ1_0_G128` |
+| Scion FlashNext 176B A6B | `Scion-FlashNext-176B-A6B-Q6_K-Q4X160.gguf` | `TQ1_0_G128` + `Q4X160` PLE |
 
-[ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md) / [maintainer PRs](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr%20is%3Aopen%20draft%3AFalse%20(author%3Asanmai%20OR%20author%3Argerganov%20OR%20author%3AKitaitiMakoto%20OR%20author%3Adanbev%20OR%20author%3Aaldehir%20OR%20author%3Amax-krasnyansky%20OR%20author%3ACISC%20OR%20author%3Aggerganov%20OR%20author%3Aam17an%20OR%20author%3Ajhen0409%20OR%20author%3Abartowski1182%20OR%20author%3Anikwen%20OR%20author%3Ahipudding%20OR%20author%3Aravi9%20OR%20author%3AServeurpersoCom%20OR%20author%3Athelittlefireman%20OR%20author%3Apwilkin%20OR%20author%3Areeselevine%20OR%20author%3Angxson%20OR%20author%3Ajeffbolznv%20OR%20author%3Amarty1885%20OR%20author%3A0cc4m%20OR%20author%3ATitaniumtown%20OR%20author%3Aangt%20OR%20author%3AIMbackK%20OR%20author%3Aarthw%20OR%20author%3AJohannesGaessler%20OR%20author%3AORippler%20OR%20author%3Aruixiang63%20OR%20author%3Axctan%20OR%20author%3AmasterFoad%20OR%20author%3Aallozaur%20OR%20author%3AAndreas-Krebbel%20OR%20author%3Ayomaytk%20OR%20author%3Aaendk%20OR%20author%3Awine99%20OR%20author%3Agaugarg-nv%20OR%20author%3Ataronaeo%20OR%20author%3Aforforever73%20OR%20author%3Achaxu01%20OR%20author%3Alhez%20OR%20author%3AAlekseiNikiforovIBM%20OR%20author%3Anetrunnereve%20OR%20author%3Afairydreaming%20OR%20author%3Aynankani)%20sort%3Aupdated-desc) / [dev stats](https://github.com/ggml-org/llama.cpp-dev) / [lib llama API](https://github.com/ggml-org/llama.cpp/issues/9289) / [llama-server REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
+## Container types
 
-</div>
+| id | name | layout |
+|---:|---|---|
+| 142 | `Q2_0_G128` | 128 weights per block, 2-bit, group 128 |
+| 143 | `TQ1_0_G128` | 128 weights per block, ternary, 5 trits per byte + `qh` |
+| 146 | `Q4X160` | 160 weights per row, 16-level codebook |
 
-## Quick start
+The Prism fork called these `PQ2_0` / `PTQ1_0`. The IDs and tensor bytes are unchanged;
+only the public names differ.
 
-A few options to get `llama.cpp` installed on your machine:
+## What this fork adds
+
+- **Container types 142/143/146** with reference quantizers and dequantizers, CPU
+  `vec_dot`, CUDA/HIP dequant/get_rows/MMVQ.
+- **`TQ1_0_G128` MMQ on RDNA3** — tile loader, RDNA3 configs, DP4A path. `SCION_DISABLE_TQ1_MMQ=1`
+  forces the old path.
+- **Embedded adapters** — `.lora_a/.lora_b` stored in the model file, applied automatically.
+- **TAARDIS correction hook** — `blk.N.ffn_moe_out.weight` applied at the MoE block output
+  through `build_lora_branch`.
+- **MTP drafter lanes** — direct `draft-mtp-sidecar` (35B), `mtp-sidecar` + fc3 chain (176B),
+  `n_embd_nextn` split.
+- **Per-layer MoE cache banks** — each host-resident MoE layer owns a slice of the expert
+  cache (as in the Prism `--moe-slot-cache`), instead of one shared LRU.
+- **Staged weight copies** — device tensors are copied through resident memory in chunks
+  (`SCION_LOAD_STAGE_MIB`, default 32). Required to load the all-GPU 176B on this runtime;
+  see the results log.
+
+## Build (ROCm, gfx1100)
+
+ROCm 10.1 as shipped broke hipMemcpy for every HIP binary on this box. An extracted 7.2.4
+runtime is used at build-run time via `LD_LIBRARY_PATH`; do not upgrade HIP without testing.
 
 ```bash
-# curl
-curl -LsSf https://llama.app/install.sh | sh
-
-# powershell
-irm https://llama.app/install.ps1 | iex
+cmake -S . -B build-hip -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1100 -DCMAKE_BUILD_TYPE=Release
+cmake --build build-hip -j 12
 ```
 
-- Visit https://llama.app and follow the instructions
-- Run with Docker - see our [Docker documentation](docs/docker.md)
-- Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
-- Build from source by cloning this repository - check out [our build guide](docs/build.md)
+## Running the 176B (all GPU)
 
-Once installed:
+Everything that is not the PLE table fits in the two cards; the PLE stays host-mapped.
+`HIP_VISIBLE_DEVICES=1,0` puts the spare card first, so `-ts 0.5,0.5` splits evenly.
 
-```sh
-# Download and run a model directly from Hugging Face
-llama cli -hf ggml-org/Qwen3.5-0.8B-GGUF
-
-# Launch OpenAI-compatible API server
-llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
+```bash
+export LD_LIBRARY_PATH=$W/rocm-7.2.4/opt/rocm/lib:$W/rocm-7.2.4/usr/lib
+export HIP_VISIBLE_DEVICES=1,0
+./build-hip/bin/llama-cli -m Scion-FlashNext-176B-A6B-Q6_K.gguf \
+  --device ROCm0,ROCm1 -ts 0.5,0.5 -ngl 99 -ncmoe 0 --moe-cache-mib 0 \
+  -ot per_layer_token_embd=CPU -c 4096 -fit off \
+  -p "The capital of France is" -n 16 -st --temp 0 --top-k 1 --top-p 1 -s 1001
 ```
 
-<table align="center">
-    <tr>
-        <td align="center" width=50%>
-            <img width="1310" height="888" alt="VLM session with `llama cli`" src="https://github.com/user-attachments/assets/88726b48-1713-48aa-a525-95a02e78afc4" />
-            <i>VLM session with <b>llama cli</b></i>
-        </td>
-        <td align="center">
-            <img width="1392" height="958" alt="Built-in web UI against `llama serve` running Qwen 3.6" src="https://github.com/user-attachments/assets/b402f972-2e32-4def-8771-8d849f08cf2e" />
-            <i>Built-in web UI against <b>llama serve</b></i>
-        </td>
-    </tr>
-<table>
+Load takes ~2.5 min. The display card must stay under 18 GiB total (model + desktop);
+`scripts/scion/gpu_run.sh` enforces it at runtime and `scripts/scion/gpu_guard.sh` checks
+the flags before launch. Use both for every GPU run.
 
-## Description
+## Results
 
-The main goal of `llama.cpp` is to enable LLM (and VLM) inference with minimal setup and state-of-the-art performance on
-a wide range of hardware - locally and in the cloud.
+Machine: 2x RX 7900 XT (20 GiB each), Ryzen 7 7800X3D, 30 GiB RAM, NVMe/btrfs.
 
-- Plain C/C++ implementation without any dependencies
-- Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
-- AVX, AVX2, AVX512 and AMX support for x86 architectures
-- RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
-- 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
-- Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
-- Vulkan and SYCL backend support
-- CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
+### 176B Q6_K, all GPU (2026-11-18)
 
-The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-org/ggml) library.
+`-ncmoe 0 -ts 0.5,0.5 --moe-cache-mib 0`, 358-token prompt, 64 generated:
 
-## Supported backends
+| metric | value |
+|---|---:|
+| prefill | **200 tok/s** |
+| decode | **22.0 tok/s** |
+| load | ~2.5 min |
+| VRAM | 14.7 GiB spare + 15.2 GiB display |
 
-| Backend | Target devices |
-| --- | --- |
-| [BLAS](docs/build.md#blas-build) | All |
-| [BLIS](docs/backend/BLIS.md) | All |
-| [CANN](docs/build.md#cann) | Huawei Ascend NPU |
-| [CUDA](docs/build.md#cuda) | Nvidia GPU |
-| [HIP](docs/build.md#hip) | AMD GPU |
-| [Hexagon](docs/backend/snapdragon/README.md) | Snapdragon |
-| [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
-| [MUSA](docs/build.md#musa) | Moore Threads GPU |
-| [Metal](docs/build.md#metal-build) | Apple Silicon |
-| [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
-| [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs |
-| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
-| [SYCL](docs/backend/SYCL.md) | Intel GPU |
-| [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
-| [Vulkan](docs/build.md#vulkan) | GPU |
-| [WebGPU](docs/build.md#webgpu) | All |
-| [ZenDNN](docs/build.md#zendnn) | AMD CPU |
+Output matches the host-split configuration on the same prompt and seed.
 
-## Documentation
+### 176B Q6_K, host experts (reference, do not use)
 
-#### Tools
+`-ncmoe 24 --moe-cache-mib 9000 --moe-cache-cpu-share 1.0`: prefill 0.25-0.56 tok/s,
+decode 0.04-0.14 tok/s. 27 CPU/GPU splits per decode step dominate; kept only for debugging.
 
-- [cli](tools/cli/README.md)
-- [completion](tools/completion/README.md)
-- [server](tools/server/README.md)
-- [GBNF grammars](grammars/README.md)
+### 35B A3B, all GPU
 
-#### Development
+| measurement | value |
+|---|---:|
+| decode, clean box | 75.9 tok/s |
+| decode, with desktop GPU load | 49.5 tok/s |
+| tokens identical to the Prism fork | 16/16 |
+| drafter acceptance | 71.4% at 69.1 tok/s |
 
-- [How to build](docs/build.md)
-- [Running on Docker](docs/docker.md)
-- [Build on Android](docs/android.md)
-- [Multi-GPU usage](docs/multi-gpu.md)
-- [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
-- [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
-- [XCFramework](docs/xcframework.md)
-- [Completions](docs/completions.md)
-- [Models](docs/models.md)
-- [Release process](docs/release.md)
+### Kernel validation
 
-## Contributing
+`test-backend-ops -b ROCm0 -o MUL_MAT,MUL_MAT_ID` for `Q2_0_G128` and `TQ1_0_G128`:
+**26/26**, including the MoE shapes.
 
-- Contributors can open PRs
-- Collaborators will be invited based on contributions
-- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
-- Any help with managing issues, PRs and projects is very appreciated!
-- Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
+## Results log
 
-## Acknowledgements
+New measurements go here, newest first, with the command and the machine state.
 
-- [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
-- [nothings/stb](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
-- [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
-- [mackron/miniaudio](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
-- [sheredom/subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+- **2026-11-18** — all-GPU 176B: 200 tok/s prefill, 22.0 tok/s decode, token parity with
+  the host-split path. Blocked until the loader stopped copying device tensors straight
+  from the mmap; that copy wedged in `kfd_wait_on_events` on `blk.41.ffn_up_exps.weight`
+  (175 MiB to the display card) with no I/O and no VRAM change. `HSA_ENABLE_SDMA=0` did
+  not help, `SCION_LOAD_STAGE_MIB=32` did.
+- **2026-11-18** — per-layer MoE banks: 365 slots/layer at 9 GiB, decode hit rate 58.52%,
+  identical to the global LRU. The pool was not contended; no speedup.
+- **2026-11-17** — `TQ1_0_G128` MMQ: 13/13 against the CPU reference; neutral for the 176B
+  because decode uses MMVQ.
+- **2026-11-17** — 176B sidecar output identical to the Prism engine; 50% acceptance on a
+  two-draft sample. 35B drafter 71.4% / 69.1 tok/s.
+- **2026-11-16** — 35B GPU 75.9 tok/s; 16/16 tokens identical to the Prism fork.
+
+## Layout
+
+- `src/llama-moe-cache.cpp` — expert cache (per-layer banks)
+- `src/llama-model-loader.cpp` — staged weight copies, `SCION_TRACE_LOAD` per-tensor trace
+- `ggml/src/ggml-cuda/` — type 142/143/146 kernels, MMQ
+- `scripts/scion/` — `gpu_guard.sh`, `gpu_run.sh`, `retype_gguf.py`
+- `docs/PORT-STATUS.md` — port status and the full measured-limits list
