@@ -6897,6 +6897,11 @@ class GGMLQuantizationType(IntEnum):
     Q1_0    = 41
     Q2_0    = 42
     F8_E4M3 = 43
+    # Scion private containers. These are not upstream types; the ids match the
+    # fork's C++ enum and sit above F8_E4M3 so published GGUFs load unchanged.
+    Q2_0_G128  = 142  # 2-bit, group 128 (35B experts + correction factors)
+    TQ1_0_G128 = 143  # ternary, group 128 (176B experts)
+    Q4X160     = 146  # 4-bit PLE table, 160-element rows
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -7132,6 +7137,9 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q1_0:    (128, 2 + 16),
     GGMLQuantizationType.Q2_0:    (64, 2 + 16),
     GGMLQuantizationType.F8_E4M3: (1, 1),
+    GGMLQuantizationType.Q2_0_G128:  (128, 2 + 32),
+    GGMLQuantizationType.TQ1_0_G128: (128, 2 + 24 + 2),
+    GGMLQuantizationType.Q4X160:     (160, 2 + 80),
 }
 
 
