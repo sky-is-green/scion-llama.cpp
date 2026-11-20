@@ -39,6 +39,10 @@ void quantize_row_tq1_0_g128(const float * GGML_RESTRICT x, void * GGML_RESTRICT
     quantize_row_tq1_0_g128_ref(x, y, k);
 }
 
+void quantize_row_q4_0_g128(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q4_0_g128_ref(x, y, k);
+}
+
 void quantize_row_q4x160(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q4x160_ref(x, y, k);
 }
@@ -275,6 +279,53 @@ void ggml_vec_dot_q2_0_g128_q8_0(int n, float * GGML_RESTRICT s, size_t bs, cons
                 sumi_block += ((int)((byte >> 2) & 3) - 1) * qy[b*4 + 1];
                 sumi_block += ((int)((byte >> 4) & 3) - 1) * qy[b*4 + 2];
                 sumi_block += ((int)((byte >> 6) & 3) - 1) * qy[b*4 + 3];
+            }
+
+            sumi += d1 * sumi_block;
+        }
+
+        sumf += d0 * sumi;
+    }
+
+    *s = sumf;
+}
+
+// Q4_0_G128 x Q8_0. Nibbles are in element order: 16 bytes per 32-element
+// Q8_0 block (low = even element, high = odd element).
+void ggml_vec_dot_q4_0_g128_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK_Q4_0_G128;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q4_0_g128 * GGML_RESTRICT x = vx;
+    const block_q8_0      * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; i++) {
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[i].d);
+
+        float sumi = 0.0f;
+
+        for (int k = 0; k < 4; k++) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[i * 4 + k];
+            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
+            int sumi_block = 0;
+
+            // low half = elements 0..63 (q8 blocks 0,1), high half = 64..127
+            const int half = k >> 1;
+            const uint8_t * GGML_RESTRICT qs = &x[i].qs[(k & 1) * 32];
+            const int8_t  * GGML_RESTRICT qy = yb->qs;
+
+            for (int b = 0; b < 32; ++b) {
+                const int code = half ? (qs[b] >> 4) : (qs[b] & 0x0F);
+                sumi_block += (code - 8) * qy[b];
             }
 
             sumi += d1 * sumi_block;

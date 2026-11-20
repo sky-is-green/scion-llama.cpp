@@ -332,7 +332,7 @@ static int test_vec_dot_q(bool verbose) {
         printf("Testing %s\n", ggml_type_name((ggml_type) i));
         ggml_quantize_init(ei);
 
-        if (qfns_cpu->from_float && qfns->to_float) {
+        if (qfns_cpu->from_float && qfns->to_float && qfns_cpu->vec_dot) {
             const float total_error = total_quantization_error(qfns, qfns_cpu, test_size, test_data.data());
             const float max_quantization_error =
                 type == GGML_TYPE_Q1_0    ? MAX_QUANTIZATION_TOTAL_ERROR_BINARY :

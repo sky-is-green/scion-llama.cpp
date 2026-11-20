@@ -113,6 +113,7 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 #define VDR_Q2_0_Q8_1_MMQ  2  // Q2_0 group 64: 128 bits (4 ints) per block, 2 32-element chunks
 
 #define VDR_Q2_0_G128_Q8_1_MMVQ 1  // one 32-element chunk at a time (same per-chunk codec as Q2_0)
+#define VDR_Q4_0_G128_Q8_1_MMVQ 1  // one 32-element chunk (16 contiguous bytes) at a time
 #define VDR_TQ1_0_G128_Q8_1_MMVQ 4 // whole 128 block per call: keeps the byte walk uniform across lanes
 #define VDR_Q2_0_G128_Q8_1_MMQ  2  // Q2_0 group 128: 4 32-element chunks per block
 #define VDR_TQ1_0_G128_Q8_1_MMQ  2 // expanded to signed bytes in the MMQ tile loader
@@ -840,6 +841,46 @@ static __device__ __forceinline__ float vec_dot_q2_0_g128_q8_1(
 
     const float d8 = __low2float(bq8_1_chunk->ds);
     return d2 * d8 * sumi;
+}
+
+// Q4_0_G128: one fp16 scale per 128 weights, nibbles in element order.
+// iqs selects one of four 32-element chunks; each chunk is 16 contiguous
+// bytes (low = even element, high = odd element).
+static __device__ __forceinline__ float vec_dot_q4_0_g128_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q4_0_g128 * bq4 = (const block_q4_0_g128 *) vbq + kbx;
+
+    const float d4 = bq4->d;
+
+    // Standard Q4_0 nibble order: low = element j, high = element j+64.
+    // iqs 0,1 cover the low 64 elements; iqs 2,3 the high 64.
+    const int half = iqs >> 1;
+    const uint8_t * qs = bq4->qs + (iqs & 1) * 32;
+    const block_q8_1 * bq8 = bq8_1 + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int b0 = qs[4*j + 0];
+        const int b1 = qs[4*j + 1];
+        const int b2 = qs[4*j + 2];
+        const int b3 = qs[4*j + 3];
+
+        int q;
+        if (half) {
+            q = (b0 >> 4) | ((b1 >> 4) << 8) | ((b2 >> 4) << 16) | ((b3 >> 4) << 24);
+        } else {
+            q = (b0 & 0x0F) | ((b1 & 0x0F) << 8) | ((b2 & 0x0F) << 16) | ((b3 & 0x0F) << 24);
+        }
+        q -= 0x08080808;
+
+        const int u = get_int_b4(bq8->qs, j);
+        sumi = ggml_cuda_dp4a(q, u, sumi);
+    }
+
+    const float d8 = __low2float(bq8->ds);
+    return d4 * d8 * sumi;
 }
 
 #if !defined(GGML_USE_HIP)

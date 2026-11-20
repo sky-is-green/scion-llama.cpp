@@ -265,7 +265,8 @@ extern "C" {
         GGML_TYPE_Q2_0_G128   = 142, // 2-bit, group 128 (Scion 35B experts + corrections)
         GGML_TYPE_TQ1_0_G128  = 143, // ternary, group 128 (Scion 176B experts)
         GGML_TYPE_Q4X160  = 146, // 4-bit PLE table, 160-element rows (Scion 176B Q4X160)
-        GGML_TYPE_COUNT   = 147,
+        GGML_TYPE_Q4_0_G128   = 147, // 4-bit, group 128 (Scion 35B hot experts)
+        GGML_TYPE_COUNT   = 148,
     };
 
     // [TAG_GGML_PREC]

@@ -1096,6 +1096,14 @@ struct ggml_cuda_type_traits<GGML_TYPE_TQ1_0_G128> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_Q4_0_G128> {
+    static constexpr int qk = QK_Q4_0_G128;
+    static constexpr int qr = QR_Q4_0_G128;
+    static constexpr int qi = QI_Q4_0_G128;
+    static constexpr int bs = sizeof(block_q4_0_g128);
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_Q4X160> {
     static constexpr int qk = QK4X160;
     static constexpr int qr = QR4X160;

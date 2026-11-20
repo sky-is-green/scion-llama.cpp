@@ -71,6 +71,18 @@ static __device__ __forceinline__ void dequantize_tq1_0_g128(const void * vx, co
     v.y = tq1_0_g128_trit(&x[ib], iqs + 1) * d;
 }
 
+static __device__ __forceinline__ void dequantize_q4_0_g128(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_q4_0_g128 * x = (const block_q4_0_g128 *) vx;
+
+    const float d = x[ib].d;
+
+    // qr == 2: iqs is the byte index; low nibble = element iqs, high = iqs+64
+    const int vui = x[ib].qs[iqs];
+
+    v.x = ((vui & 0x0F) - 8.0f) * d;
+    v.y = ((vui >>   4) - 8.0f) * d;
+}
+
 static __device__ __forceinline__ void dequantize_q4x160(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_q4x160 * x = (const block_q4x160 *) vx;
 

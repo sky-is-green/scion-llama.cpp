@@ -5824,6 +5824,73 @@ size_t quantize_q2_0_g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrow * row_size;
 }
 
+// Q4_0_G128 (type 147): one fp16 scale per 128 weights, 4-bit codes.
+// The scale is symmetric (amax/7, codes -7..7 stored as 1..15) and the codes
+// are computed against the fp16-rounded scale, matching rco_alloc.int_codes
+// so the trainer's bits=4 dequantisation and the deployed container agree.
+void dequantize_row_q4_0_g128(const block_q4_0_g128 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_Q4_0_G128;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        for (int j = 0; j < qk / 2; ++j) {
+            const uint8_t q = x[i].qs[j];
+            y[i*qk + j]      = ((int)(q & 0x0F) - 8) * d;
+            y[i*qk + qk/2 + j] = ((int)(q >>   4) - 8) * d;
+        }
+    }
+}
+
+void quantize_row_q4_0_g128_ref(const float * GGML_RESTRICT x, block_q4_0_g128 * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_Q4_0_G128;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        float amax = 0.0f;
+        for (int j = 0; j < qk; j++) {
+            const float a = fabsf(x[i*qk + j]);
+            if (a > amax) amax = a;
+        }
+
+        const float d = amax / 7.0f;
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        const float d16 = GGML_FP16_TO_FP32(y[i].d);
+        const float id  = d16 > 0.0f ? 1.0f / d16 : 0.0f;
+
+        for (int j = 0; j < qk / 2; ++j) {
+            int q0 = (int)roundf(x[i*qk + j] * id);
+            int q1 = (int)roundf(x[i*qk + qk/2 + j] * id);
+            q0 = q0 < -7 ? -7 : (q0 > 7 ? 7 : q0);
+            q1 = q1 < -7 ? -7 : (q1 > 7 ? 7 : q1);
+            y[i].qs[j] = (uint8_t)((q0 + 8) | ((q1 + 8) << 4));
+        }
+    }
+}
+
+size_t quantize_q4_0_g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    if (!quant_weights) {
+        quantize_row_q4_0_g128_ref(src, dst, (int64_t)nrow*n_per_row);
+        return nrow * ggml_row_size(GGML_TYPE_Q4_0_G128, n_per_row);
+    }
+    size_t row_size = ggml_row_size(GGML_TYPE_Q4_0_G128, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q4_0_g128_ref(src, (block_q4_0_g128*)qrow, n_per_row);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
 // TQ1_0_G128 (type 143): base-3 trit packing as TQ1_0, one fp16 scale per 128.
 static const size_t tq1_0_g128_stages[3] = {32, 16, 8};
 

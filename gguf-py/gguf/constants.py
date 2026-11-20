@@ -6902,6 +6902,7 @@ class GGMLQuantizationType(IntEnum):
     Q2_0_G128  = 142  # 2-bit, group 128 (35B experts + correction factors)
     TQ1_0_G128 = 143  # ternary, group 128 (176B experts)
     Q4X160     = 146  # 4-bit PLE table, 160-element rows
+    Q4_0_G128  = 147  # 4-bit, group 128 (35B hot experts)
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -7140,6 +7141,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q2_0_G128:  (128, 2 + 32),
     GGMLQuantizationType.TQ1_0_G128: (128, 2 + 24 + 2),
     GGMLQuantizationType.Q4X160:     (160, 2 + 80),
+    GGMLQuantizationType.Q4_0_G128:  (128, 2 + 64),
 }
 
 

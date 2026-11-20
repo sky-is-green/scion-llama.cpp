@@ -103,6 +103,8 @@ typedef sycl::half2 ggml_half2;
 #define QR_Q2_0_G128 1
 #define QI_TQ1_0_G128 (QK_TQ1_0_G128 / 32)
 #define QR_TQ1_0_G128 1
+#define QI_Q4_0_G128 (QK_Q4_0_G128 / 32)
+#define QR_Q4_0_G128 2
 
 #define QI4X160 (QK4X160 / 32)
 #define QR4X160 2
@@ -216,6 +218,17 @@ typedef struct {
     ggml_half d;                                // scale
 } block_tq1_0_g128;
 static_assert(sizeof(block_tq1_0_g128) == sizeof(ggml_half) + QK_TQ1_0_G128/64 + (QK_TQ1_0_G128 - 4*QK_TQ1_0_G128/64)/5, "wrong tq1_0_g128 block size/padding");
+
+// Q4_0_G128: one fp16 scale per 128 weights, 4-bit codes.  Standard Q4_0
+// nibble order: low nibble = element j, high nibble = element j+64.  Codes
+// are 0..15 with value (code-8)*d; the packer uses a symmetric amax/7 scale
+// (codes 1..15) to match rco_alloc.
+#define QK_Q4_0_G128 128
+typedef struct {
+    ggml_half d;                 // delta (scale)
+    uint8_t qs[QK_Q4_0_G128 / 2];    // 4 bits per element
+} block_q4_0_g128;
+static_assert(sizeof(block_q4_0_g128) == sizeof(ggml_half) + QK_Q4_0_G128 / 2, "wrong q4_0_g128 block size/padding");
 
 // Q4X160: one 160-element PLE table row per block, 4-bit codes into a fixed
 // 16-level codebook and one fp16 scale.
