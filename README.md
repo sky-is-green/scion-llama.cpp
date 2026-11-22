@@ -9,10 +9,18 @@ MIT licensed, same as upstream.
 ## Prebuilt release
 
 [`scion-v1.0.0`](https://github.com/sky-is-green/scion-llama.cpp/releases/tag/scion-v1.0.0)
-has Linux x64 ROCm (gfx1100) and CPU tarballs built from commit `2089cd1d3`
-(build 12389). The ROCm tarball was smoke-tested on ROCm 7.2.4 / RX 7900 XT
-with the 16.2 GB Q4 model at 58.8 tok/s. No Windows, macOS or CUDA binaries are
-published yet; build those from source.
+has packages built from commit `2089cd1d3` (build 12389):
+
+- Linux x64 ROCm (gfx1100) and CPU.
+- Windows x64 CPU and CUDA 12.4.
+- Linux x64 CUDA 12.4.
+- macOS arm64 CPU.
+
+The ROCm package is the hardware-verified one: the 16.2 GB Q4 model loaded at
+58.8 tok/s on ROCm 7.2.4 / RX 7900 XT. The CUDA packages are previews:
+FlashAttention is disabled, they are compile-checked but not hardware-tested on
+NVIDIA, and they have no embedded web UI. macOS is CPU-only because the Scion
+custom types have no Metal kernels.
 
 The older Prism `moe-corr-runtime` fork remains a legacy backup for the Q2
 model only; it predates `Q4_0_G128` (type 147) and cannot load the Q4 variant.
