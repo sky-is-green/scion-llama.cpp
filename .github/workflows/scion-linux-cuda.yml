@@ -1,0 +1,90 @@
+name: Scion Linux CUDA
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload to"
+        required: true
+        default: "scion-v1.0.0"
+      sha:
+        description: "Short commit SHA for the package name"
+        required: true
+        default: "2089cd1d3"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-cuda:
+    runs-on: ubuntu-22.04
+    container: nvidia/cuda:12.4.1-devel-ubuntu22.04
+    steps:
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y git
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake ninja-build
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CUDA=ON \
+            -DGGML_CUDA_NCCL=OFF \
+            -DGGML_CUDA_FA=OFF \
+            -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89" \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF
+      - name: Build
+        run: cmake --build build --parallel 4 --target llama-cli llama-server llama-perplexity
+      - name: Package
+        run: |
+          name="scion-llama.cpp-${{ inputs.sha }}-linux-x64-cuda12.4"
+          mkdir -p "pkg/$name/bin"
+          cp build/bin/llama-cli build/bin/llama-server build/bin/llama-perplexity "pkg/$name/bin/"
+          cp LICENSE README.md "pkg/$name/"
+          cat > "pkg/$name/RUNNING.md" <<EOF
+          # Scion llama.cpp - Linux x64 CUDA 12.4
+
+          Built from scion-llama.cpp commit ${{ inputs.sha }}, branch scion-base.
+          Includes the private GGUF types 142 (Q2_0_g128), 143 (TQ1_0_g128), and 147 (Q4_0_g128).
+          Stock llama.cpp/LM Studio/Ollama cannot load these models.
+
+          A CUDA 12.4 runtime and an NVIDIA driver are required. NCCL is not required.
+          This preview disables FlashAttention and uses the standard attention path.
+          The build was compile-checked in CI but not hardware-tested on an NVIDIA GPU.
+          This package has no embedded web UI; the OpenAI-compatible API works.
+
+              ./bin/llama-server -m Scion-35B-A3B-Q4_0-GateUp-TQ1Down-v1corr.gguf -ngl 99 -c 4096 -t 8 --port 8080
+
+          MIT licensed, same as upstream.
+          EOF
+          tar -czf "pkg/$name.tar.gz" -C pkg "$name"
+          sha256sum "pkg/$name.tar.gz" | sed "s#pkg/##" > "pkg/$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64-cuda
+          path: pkg/*
+
+  release:
+    needs: linux-cuda
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh artifacts
+          gh release upload "${{ inputs.tag }}" artifacts/*.tar.gz artifacts/*.sha256 \
+            --clobber --repo sky-is-green/scion-llama.cpp
