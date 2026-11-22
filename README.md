@@ -6,12 +6,24 @@ models; it is not a general-purpose llama.cpp distribution and does not track up
 
 MIT licensed, same as upstream.
 
+## Prebuilt release
+
+[`scion-v1.0.0`](https://github.com/sky-is-green/scion-llama.cpp/releases/tag/scion-v1.0.0)
+has Linux x64 ROCm (gfx1100) and CPU tarballs built from commit `2089cd1d3`
+(build 12389). The ROCm tarball was smoke-tested on ROCm 7.2.4 / RX 7900 XT
+with the 16.2 GB Q4 model at 58.8 tok/s. No Windows, macOS or CUDA binaries are
+published yet; build those from source.
+
+The older Prism `moe-corr-runtime` fork remains a legacy backup for the Q2
+model only; it predates `Q4_0_G128` (type 147) and cannot load the Q4 variant.
+
 ## Models
 
 | model | file | expert container |
 |---|---|---|
 | Scion 35B A3B | `Scion-35B-A3B-Q2_0_G128-corr-v1.gguf` | `Q2_0_G128` |
 | Scion 35B A3B base-router | `Scion-35B-A3B-Q2_0_G128-base-router-v1.gguf` | `Q2_0_G128` |
+| Scion 35B A3B Q4 gate/up | `Scion-35B-A3B-Q4_0-GateUp-TQ1Down-v1corr.gguf` | `Q4_0_G128` gate/up + `TQ1_0_G128` down |
 | Scion FlashNext 176B A6B | `Scion-FlashNext-176B-A6B-Q6_K.gguf` | `TQ1_0_G128` |
 | Scion FlashNext 176B A6B | `Scion-FlashNext-176B-A6B-Q6_K-Q4X160.gguf` | `TQ1_0_G128` + `Q4X160` PLE |
 
@@ -22,6 +34,7 @@ MIT licensed, same as upstream.
 | 142 | `Q2_0_G128` | 128 weights per block, 2-bit, group 128 |
 | 143 | `TQ1_0_G128` | 128 weights per block, ternary, 5 trits per byte + `qh` |
 | 146 | `Q4X160` | 160 weights per row, 16-level codebook |
+| 147 | `Q4_0_G128` | 128 weights per block, 4-bit, group 128 |
 
 The Prism fork called these `PQ2_0` / `PTQ1_0`. The IDs and tensor bytes are unchanged;
 only the public names differ.
