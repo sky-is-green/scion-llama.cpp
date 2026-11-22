@@ -57,6 +57,7 @@ jobs:
 
           The 16.2 GB Q4 file needs roughly 17 GB of RAM.
           This package has no embedded web UI; the OpenAI-compatible API works.
+          This CUDA preview disables FlashAttention and uses the standard attention path.
           MIT licensed, same as upstream.
           "@ | Set-Content "pkg/$name/RUNNING.md"
           Compress-Archive -Path "pkg/$name" -DestinationPath "pkg/$name.zip"
@@ -88,7 +89,7 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DGGML_CUDA_CCCL_VERSION=v3.4.3 -DLLAMA_BUILD_TESTS=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DGGML_CUDA_CCCL_VERSION=v3.4.3 -DGGML_CUDA_FA=OFF "-DCMAKE_CUDA_ARCHITECTURES=75;80;86;89" -DLLAMA_BUILD_TESTS=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF
       - name: Build
         shell: cmd
         run: |
@@ -118,6 +119,7 @@ jobs:
               .\bin\llama-server.exe -m Scion-35B-A3B-Q4_0-GateUp-TQ1Down-v1corr.gguf -ngl 99 -c 4096 -t 8 --port 8080
 
           This package has no embedded web UI; the OpenAI-compatible API works.
+          This CUDA preview disables FlashAttention and uses the standard attention path.
           MIT licensed, same as upstream.
           "@ | Set-Content "pkg/$name/RUNNING.md"
           Compress-Archive -Path "pkg/$name" -DestinationPath "pkg/$name.zip"
@@ -168,6 +170,7 @@ jobs:
 
           The 16.2 GB Q4 file needs roughly 17 GB of RAM.
           This package has no embedded web UI; the OpenAI-compatible API works.
+          This CUDA preview disables FlashAttention and uses the standard attention path.
           MIT licensed, same as upstream.
           EOF
           tar -czf "pkg/$name.tar.gz" -C pkg "$name"
@@ -203,6 +206,8 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_NATIVE=OFF \
             -DGGML_CUDA=ON \
+            -DGGML_CUDA_FA=OFF \
+            -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89" \
             -DLLAMA_BUILD_TESTS=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF
       - name: Build
         run: cmake --build build --parallel 4 --target llama-cli llama-server llama-perplexity
@@ -222,6 +227,7 @@ jobs:
           A CUDA 12.4 runtime and an NVIDIA driver are required. The build was
           compile-checked in CI but not hardware-tested on an NVIDIA GPU.
           This package has no embedded web UI; the OpenAI-compatible API works.
+          This CUDA preview disables FlashAttention and uses the standard attention path.
 
               ./bin/llama-server -m Scion-35B-A3B-Q4_0-GateUp-TQ1Down-v1corr.gguf -ngl 99 -c 4096 -t 8 --port 8080
 
