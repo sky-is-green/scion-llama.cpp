@@ -57,7 +57,6 @@ jobs:
 
           The 16.2 GB Q4 file needs roughly 17 GB of RAM.
           This package has no embedded web UI; the OpenAI-compatible API works.
-          This CUDA preview disables FlashAttention and uses the standard attention path.
           MIT licensed, same as upstream.
           "@ | Set-Content "pkg/$name/RUNNING.md"
           Compress-Archive -Path "pkg/$name" -DestinationPath "pkg/$name.zip"
@@ -170,7 +169,6 @@ jobs:
 
           The 16.2 GB Q4 file needs roughly 17 GB of RAM.
           This package has no embedded web UI; the OpenAI-compatible API works.
-          This CUDA preview disables FlashAttention and uses the standard attention path.
           MIT licensed, same as upstream.
           EOF
           tar -czf "pkg/$name.tar.gz" -C pkg "$name"
