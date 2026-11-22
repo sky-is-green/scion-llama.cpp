@@ -1,0 +1,246 @@
+name: Scion release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and upload to"
+        required: true
+        default: "scion-v1.0.0"
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag }}
+
+jobs:
+  windows-cpu:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Version
+        id: v
+        shell: bash
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install Ninja
+        run: choco install ninja -y
+      - name: Configure
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_CUDA=OFF -DLLAMA_BUILD_TESTS=OFF
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake --build build --parallel 4 --target llama-cli llama-server llama-perplexity
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "scion-llama.cpp-${{ steps.v.outputs.sha }}-windows-x64-cpu"
+          New-Item -ItemType Directory -Path "pkg/$name/bin" -Force | Out-Null
+          Copy-Item build/bin/llama-cli.exe, build/bin/llama-server.exe, build/bin/llama-perplexity.exe "pkg/$name/bin/"
+          Copy-Item LICENSE, README.md "pkg/$name/"
+          @"
+          # Scion llama.cpp - Windows x64 CPU
+
+          Built from scion-llama.cpp commit ${{ steps.v.outputs.sha }}, branch scion-base.
+          Includes the private GGUF types 142 (Q2_0_g128), 143 (TQ1_0_g128), and 147 (Q4_0_g128).
+          Stock llama.cpp/LM Studio/Ollama cannot load these models.
+
+          Run from this directory:
+
+              .\bin\llama-server.exe -m Scion-35B-A3B-PQ2_0-corr.gguf -ngl 0 -c 4096 -t 8 --port 8080
+
+          The 16.2 GB Q4 file needs roughly 17 GB of RAM.
+          MIT licensed, same as upstream.
+          "@ | Set-Content "pkg/$name/RUNNING.md"
+          Compress-Archive -Path "pkg/$name" -DestinationPath "pkg/$name.zip"
+          $h = (Get-FileHash "pkg/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$h  $name.zip" | Set-Content "pkg/$name.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-cpu
+          path: pkg/*
+
+  windows-cuda:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Version
+        id: v
+        shell: bash
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install Ninja
+        run: choco install ninja -y
+      - name: Install CUDA 12.4
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: "12.4"
+          cuda_arch: x64
+      - name: Configure
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DGGML_CUDA_CCCL_VERSION=v3.4.3 -DLLAMA_BUILD_TESTS=OFF
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake --build build --parallel 4 --target llama-cli llama-server llama-perplexity
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "scion-llama.cpp-${{ steps.v.outputs.sha }}-windows-x64-cuda12.4"
+          New-Item -ItemType Directory -Path "pkg/$name/bin" -Force | Out-Null
+          Copy-Item build/bin/llama-cli.exe, build/bin/llama-server.exe, build/bin/llama-perplexity.exe "pkg/$name/bin/"
+          Copy-Item "$env:CUDA_PATH\bin\cudart64_12.dll" "pkg/$name/bin/"
+          Copy-Item "$env:CUDA_PATH\bin\cublas64_12.dll" "pkg/$name/bin/"
+          Copy-Item "$env:CUDA_PATH\bin\cublasLt64_12.dll" "pkg/$name/bin/"
+          Copy-Item LICENSE, README.md "pkg/$name/"
+          @"
+          # Scion llama.cpp - Windows x64 CUDA 12.4
+
+          Built from scion-llama.cpp commit ${{ steps.v.outputs.sha }}, branch scion-base.
+          Includes the private GGUF types 142 (Q2_0_g128), 143 (TQ1_0_g128), and 147 (Q4_0_g128).
+          Stock llama.cpp/LM Studio/Ollama cannot load these models.
+
+          The CUDA runtime DLLs are bundled next to the executables. An NVIDIA driver
+          with CUDA 12.4 support is required; the build was compile-checked in CI but
+          not hardware-tested on an NVIDIA GPU.
+
+              .\bin\llama-server.exe -m Scion-35B-A3B-Q4_0-GateUp-TQ1Down-v1corr.gguf -ngl 99 -c 4096 -t 8 --port 8080
+
+          MIT licensed, same as upstream.
+          "@ | Set-Content "pkg/$name/RUNNING.md"
+          Compress-Archive -Path "pkg/$name" -DestinationPath "pkg/$name.zip"
+          $h = (Get-FileHash "pkg/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$h  $name.zip" | Set-Content "pkg/$name.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-cuda
+          path: pkg/*
+
+  macos-cpu:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Version
+        id: v
+        shell: bash
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install Ninja
+        run: command -v ninja >/dev/null || brew install ninja
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_METAL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --parallel 4 --target llama-cli llama-server llama-perplexity
+      - name: Package
+        run: |
+          name="scion-llama.cpp-${{ steps.v.outputs.sha }}-macos-arm64-cpu"
+          mkdir -p "pkg/$name/bin"
+          cp build/bin/llama-cli build/bin/llama-server build/bin/llama-perplexity "pkg/$name/bin/"
+          cp LICENSE README.md "pkg/$name/"
+          cat > "pkg/$name/RUNNING.md" <<EOF
+          # Scion llama.cpp - macOS arm64 CPU
+
+          Built from scion-llama.cpp commit ${{ steps.v.outputs.sha }}, branch scion-base.
+          Includes the private GGUF types 142 (Q2_0_g128), 143 (TQ1_0_g128), and 147 (Q4_0_g128).
+          Stock llama.cpp/LM Studio/Ollama cannot load these models.
+
+          This is a CPU-only build: the Scion custom types do not have Metal kernels yet.
+
+              ./bin/llama-server -m Scion-35B-A3B-PQ2_0-corr.gguf -ngl 0 -c 4096 -t 8 --port 8080
+
+          The 16.2 GB Q4 file needs roughly 17 GB of RAM.
+          MIT licensed, same as upstream.
+          EOF
+          tar -czf "pkg/$name.tar.gz" -C pkg "$name"
+          shasum -a 256 "pkg/$name.tar.gz" | sed "s#pkg/##" > "pkg/$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-cpu
+          path: pkg/*
+
+  linux-cuda:
+    runs-on: ubuntu-22.04
+    container: nvidia/cuda:12.4.1-devel-ubuntu22.04
+    steps:
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y git
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake ninja-build
+      - name: Version
+        id: v
+        shell: bash
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CUDA=ON \
+            -DLLAMA_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --parallel 4 --target llama-cli llama-server llama-perplexity
+      - name: Package
+        run: |
+          name="scion-llama.cpp-${{ steps.v.outputs.sha }}-linux-x64-cuda12.4"
+          mkdir -p "pkg/$name/bin"
+          cp build/bin/llama-cli build/bin/llama-server build/bin/llama-perplexity "pkg/$name/bin/"
+          cp LICENSE README.md "pkg/$name/"
+          cat > "pkg/$name/RUNNING.md" <<EOF
+          # Scion llama.cpp - Linux x64 CUDA 12.4
+
+          Built from scion-llama.cpp commit ${{ steps.v.outputs.sha }}, branch scion-base.
+          Includes the private GGUF types 142 (Q2_0_g128), 143 (TQ1_0_g128), and 147 (Q4_0_g128).
+          Stock llama.cpp/LM Studio/Ollama cannot load these models.
+
+          A CUDA 12.4 runtime and an NVIDIA driver are required. The build was
+          compile-checked in CI but not hardware-tested on an NVIDIA GPU.
+
+              ./bin/llama-server -m Scion-35B-A3B-Q4_0-GateUp-TQ1Down-v1corr.gguf -ngl 99 -c 4096 -t 8 --port 8080
+
+          MIT licensed, same as upstream.
+          EOF
+          tar -czf "pkg/$name.tar.gz" -C pkg "$name"
+          sha256sum "pkg/$name.tar.gz" | sed "s#pkg/##" > "pkg/$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64-cuda
+          path: pkg/*
+
+  release:
+    needs: [windows-cpu, windows-cuda, macos-cpu, linux-cuda]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh artifacts
+          gh release upload "${{ inputs.tag }}" artifacts/* --clobber
