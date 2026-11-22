@@ -31,7 +31,7 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_CUDA=OFF -DLLAMA_BUILD_TESTS=OFF
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_CUDA=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF
       - name: Build
         shell: cmd
         run: |
@@ -56,6 +56,8 @@ jobs:
               .\bin\llama-server.exe -m Scion-35B-A3B-PQ2_0-corr.gguf -ngl 0 -c 4096 -t 8 --port 8080
 
           The 16.2 GB Q4 file needs roughly 17 GB of RAM.
+          This package has no embedded web UI; the OpenAI-compatible API works.
+          This package has no embedded web UI; the OpenAI-compatible API works.
           MIT licensed, same as upstream.
           "@ | Set-Content "pkg/$name/RUNNING.md"
           Compress-Archive -Path "pkg/$name" -DestinationPath "pkg/$name.zip"
@@ -87,7 +89,7 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DGGML_CUDA_CCCL_VERSION=v3.4.3 -DLLAMA_BUILD_TESTS=OFF
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DGGML_CUDA_CCCL_VERSION=v3.4.3 -DLLAMA_BUILD_TESTS=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF
       - name: Build
         shell: cmd
         run: |
@@ -116,6 +118,7 @@ jobs:
 
               .\bin\llama-server.exe -m Scion-35B-A3B-Q4_0-GateUp-TQ1Down-v1corr.gguf -ngl 99 -c 4096 -t 8 --port 8080
 
+          This package has no embedded web UI; the OpenAI-compatible API works.
           MIT licensed, same as upstream.
           "@ | Set-Content "pkg/$name/RUNNING.md"
           Compress-Archive -Path "pkg/$name" -DestinationPath "pkg/$name.zip"
@@ -127,7 +130,7 @@ jobs:
           path: pkg/*
 
   macos-cpu:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -144,7 +147,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_METAL=OFF \
-            -DLLAMA_BUILD_TESTS=OFF
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF
       - name: Build
         run: cmake --build build --parallel 4 --target llama-cli llama-server llama-perplexity
       - name: Package
@@ -165,6 +168,7 @@ jobs:
               ./bin/llama-server -m Scion-35B-A3B-PQ2_0-corr.gguf -ngl 0 -c 4096 -t 8 --port 8080
 
           The 16.2 GB Q4 file needs roughly 17 GB of RAM.
+          This package has no embedded web UI; the OpenAI-compatible API works.
           MIT licensed, same as upstream.
           EOF
           tar -czf "pkg/$name.tar.gz" -C pkg "$name"
@@ -200,7 +204,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_NATIVE=OFF \
             -DGGML_CUDA=ON \
-            -DLLAMA_BUILD_TESTS=OFF
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DLLAMA_BUILD_UI=OFF
       - name: Build
         run: cmake --build build --parallel 4 --target llama-cli llama-server llama-perplexity
       - name: Package
@@ -218,6 +222,7 @@ jobs:
 
           A CUDA 12.4 runtime and an NVIDIA driver are required. The build was
           compile-checked in CI but not hardware-tested on an NVIDIA GPU.
+          This package has no embedded web UI; the OpenAI-compatible API works.
 
               ./bin/llama-server -m Scion-35B-A3B-Q4_0-GateUp-TQ1Down-v1corr.gguf -ngl 99 -c 4096 -t 8 --port 8080
 
